@@ -15,7 +15,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.9'
 
       - name: Install system dependencies
         run: |
@@ -44,11 +44,6 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install buildozer cython
-
-      - name: Clean old SDK (optional)
-        run: |
-          rm -rf ~/.buildozer/android/platform/android-sdk
-          rm -rf ~/.buildozer/android/platform/android-ndk*
 
       - name: Build APK
         run: |

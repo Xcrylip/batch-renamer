@@ -25,7 +25,7 @@ main.py = main.py
 version = 0.1
 
 # 依赖的 Python 模块（会自动通过 pip 安装）
-requirements = python3,kivy
+requirements = python3,kivy==2.1.0
 
 # 需要的权限（Android 权限）
 android.permissions = READ_EXTERNAL_STORAGE, WRITE_EXTERNAL_STORAGE
@@ -42,16 +42,8 @@ android.accept_sdk_license = True
 # 是否使用 AndroidX（通常启用）
 android.androidx = True
 
-# 说明：不再手动指定 NDK 和 build-tools，让 Buildozer 自动选择合适的版本
-# 这样可以避免版本冲突导致的构建失败
-# android.ndk = 28c
-# android.build_tools_version = 34.0.0
-
 # 应用图标（可选，不设置会使用默认）
 # icon.filename = %(source.dir)s/icon.png
-
-# 是否启用屏幕方向锁定（可选）
-# orientation = portrait
 
 # 日志级别
 log_level = 2
