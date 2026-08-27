@@ -36,8 +36,11 @@ android.api = 31
 # 最低 Android API 级别
 android.minapi = 21
 
-# 目标 Android API 级别
+# Android NDK 版本
 android.ndk = 23b
+
+# 指定 Android build-tools 版本，确保包含 aidl 工具
+android.build_tools_version = 34.0.0
 
 # 是否使用 AndroidX（通常启用）
 android.androidx = True
