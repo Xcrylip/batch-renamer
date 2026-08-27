@@ -30,7 +30,7 @@ requirements = python3,kivy
 # 需要的权限（Android 权限）
 android.permissions = READ_EXTERNAL_STORAGE, WRITE_EXTERNAL_STORAGE
 
-# Android API 级别（建议 31 或更高）
+# Android API 级别
 android.api = 31
 
 # 最低 Android API 级别
@@ -42,16 +42,14 @@ android.ndk = 23b
 # 指定 Android build-tools 版本，确保包含 aidl 工具
 android.build_tools_version = 34.0.0
 
+# 自动接受 SDK 许可
+android.accept_sdk_license = True
+
 # 是否使用 AndroidX（通常启用）
 android.androidx = True
 
 # 应用图标（可选，不设置会使用默认）
 # icon.filename = %(source.dir)s/icon.png
 
-# 是否启用屏幕方向锁定（可选）
-# orientation = portrait
-
 # 日志级别
 log_level = 2
-
-# 其他设置保持默认即可
