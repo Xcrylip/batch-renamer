@@ -37,7 +37,7 @@ android.api = 31
 android.minapi = 21
 
 # Android NDK 版本
-android.ndk = 23b
+android.ndk = 28c
 
 # 指定 Android build-tools 版本，确保包含 aidl 工具
 android.build_tools_version = 34.0.0
