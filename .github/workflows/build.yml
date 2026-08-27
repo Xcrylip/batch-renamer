@@ -37,10 +37,7 @@ jobs:
             zlib1g-dev \
             libgstreamer1.0-0 \
             gstreamer1.0-plugins-base \
-            gstreamer1.0-plugins-good \
-            aidl \
-            android-sdk-libsparse-utils \
-            android-sdk-build-tools
+            gstreamer1.0-plugins-good
 
       - name: Install Buildozer
         run: |
@@ -49,6 +46,14 @@ jobs:
 
       - name: Build APK
         run: |
+          # 确保 Buildozer 下载的 Android SDK 包含 build-tools
+          buildozer -v android debug || true
+          # 检查 aidl 是否存在，若不存在则尝试通过 sdkmanager 安装
+          if [ ! -f ~/.buildozer/android/platform/android-sdk/build-tools/*/aidl ]; then
+            echo "aidl not found, installing build-tools via sdkmanager..."
+            ~/.buildozer/android/platform/android-sdk/tools/bin/sdkmanager "build-tools;34.0.0"
+          fi
+          # 重新构建
           buildozer -v android debug
 
       - name: Upload APK artifact
