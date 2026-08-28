@@ -20,7 +20,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
+          sudo apt-get install -y --no-install-recommends \
             python3-pip \
             build-essential \
             git \
@@ -38,7 +38,18 @@ jobs:
             libgstreamer1.0-0 \
             gstreamer1.0-plugins-base \
             gstreamer1.0-plugins-good \
-            openjdk-17-jdk
+            openjdk-17-jdk \
+            autoconf \
+            automake \
+            libtool \
+            m4 \
+            pkg-config \
+            libffi-dev \
+            libgdbm-dev \
+            libssl-dev \
+            libbz2-dev \
+            libreadline-dev \
+            libsqlite3-dev
 
       - name: Install Buildozer
         run: |
@@ -47,6 +58,7 @@ jobs:
 
       - name: Build APK
         run: |
+          unset ANDROID_NDK ANDROID_NDK_HOME ANDROID_NDK_ROOT ANDROID_HOME ANDROID_SDK_ROOT
           buildozer -v android debug
 
       - name: Upload APK artifact
