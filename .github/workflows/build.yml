@@ -71,6 +71,13 @@ jobs:
           pip install --upgrade pip
           pip install buildozer
 
+      - name: Clean Buildozer cache
+        run: |
+          rm -rf ~/.buildozer/android/platform/android-ndk*
+          rm -rf ~/.buildozer/android/platform/android-sdk
+          rm -rf ~/.buildozer/android/platform/build-arm64-v8a_armeabi-v7a
+          rm -rf .buildozer/android/platform/build-arm64-v8a_armeabi-v7a
+
       - name: Build APK
         run: |
           unset ANDROID_NDK ANDROID_NDK_HOME ANDROID_NDK_ROOT ANDROID_HOME ANDROID_SDK_ROOT
