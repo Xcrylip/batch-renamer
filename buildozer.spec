@@ -27,6 +27,9 @@ version = 0.1
 # 依赖的 Python 模块（会自动通过 pip 安装）
 requirements = python3==3.11.16,kivy==2.1.0
 
+# 指定 hostpython 版本，必须与 requirements 中的 python 版本一致
+android.hostpython = python3.11.16
+
 # 需要的权限（Android 权限）
 android.permissions = READ_EXTERNAL_STORAGE, WRITE_EXTERNAL_STORAGE
 
