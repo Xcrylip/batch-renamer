@@ -17,14 +17,26 @@ jobs:
         with:
           python-version: '3.9'
 
-      - name: Install system dependencies
+      - name: Install system build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            python3-pip \
+          sudo apt-get install -y \
+            autoconf \
+            automake \
+            libtool \
+            libtool-bin \
+            m4 \
+            pkg-config \
             build-essential \
-            git \
+            make \
+            gcc \
+            g++ \
+            libffi-dev \
+            zlib1g-dev \
+            libssl-dev \
+            python3-pip \
             python3-dev \
+            git \
             ffmpeg \
             libsdl2-dev \
             libsdl2-image-dev \
@@ -34,27 +46,31 @@ jobs:
             libswscale-dev \
             libavformat-dev \
             libavcodec-dev \
-            zlib1g-dev \
             libgstreamer1.0-0 \
             gstreamer1.0-plugins-base \
             gstreamer1.0-plugins-good \
             openjdk-17-jdk \
-            autoconf \
-            automake \
-            libtool \
-            libtool-bin \
-            m4 \
-            pkg-config \
             autoconf-archive \
             gettext \
-            libffi-dev \
-            libgdbm-dev \
-            libssl-dev \
             libbz2-dev \
             libreadline-dev \
             libsqlite3-dev \
+            libgdbm-dev \
             tk-dev \
             libdb-dev
+
+      - name: Verify autotools installation
+        run: |
+          echo "=== autoconf ==="
+          autoconf --version | head -1
+          echo "=== automake ==="
+          automake --version | head -1
+          echo "=== libtool ==="
+          libtool --version | head -1
+          echo "=== libtoolize ==="
+          which libtoolize || echo "libtoolize not found"
+          echo "=== m4 ==="
+          m4 --version | head -1
 
       - name: Install Buildozer
         run: |
