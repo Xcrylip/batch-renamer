@@ -25,7 +25,7 @@ main.py = main.py
 version = 0.1
 
 # 依赖的 Python 模块（会自动通过 pip 安装）
-requirements = python3,kivy==2.1.0
+requirements = python3==3.11,kivy==2.1.0
 
 # 需要的权限（Android 权限）
 android.permissions = READ_EXTERNAL_STORAGE, WRITE_EXTERNAL_STORAGE
