@@ -15,7 +15,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
+          python-version: '3.11'
 
       - name: Install system build dependencies
         run: |
@@ -61,23 +61,15 @@ jobs:
             tk-dev \
             libdb-dev
 
-      - name: Verify libtool macros and tools
+      - name: Install Python build tools
         run: |
-          echo "=== libtoolize ==="
-          which libtoolize || { echo "libtoolize not found"; exit 1; }
-          libtoolize --version || true
-          echo "=== aclocal ==="
-          which aclocal || { echo "aclocal not found"; exit 1; }
-          aclocal --version || true
-          echo "=== autoconf ==="
-          autoconf --version | head -1
-          echo "=== automake ==="
-          automake --version | head -1
+          python -m pip install --upgrade pip setuptools wheel build
+          python -m pip install cython==0.29.34
 
       - name: Install Buildozer
         run: |
           pip install --upgrade pip
-          pip install buildozer cython
+          pip install buildozer
 
       - name: Build APK
         run: |
