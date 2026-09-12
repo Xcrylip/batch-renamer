@@ -20,6 +20,12 @@ jobs:
       - name: Install system build dependencies
         run: |
           sudo apt-get update
+          # 注意：这里刻意【不】安装 libsdl2-dev 等宿主 SDL2 开发库。
+          # 原因：交叉编译 kivy 的 C 扩展时，宿主的 pkg-config 会把
+          # /usr/include/SDL2、/usr/include/x86_64-linux-gnu 等宿主 glibc 头文件路径
+          # 注入到 clang 命令行里，导致 NDK 的 assert.h 引到宿主 glibc 的
+          # sys/cdefs.h，报 "__GNUC_PREREQ is not defined"。
+          # SDL2 的头文件由 python-for-android 的 bootstrap 自己提供，无需宿主安装。
           sudo apt-get install -y \
             autoconf \
             automake \
@@ -39,18 +45,6 @@ jobs:
             python3-pip \
             python3-dev \
             git \
-            ffmpeg \
-            libsdl2-dev \
-            libsdl2-image-dev \
-            libsdl2-mixer-dev \
-            libsdl2-ttf-dev \
-            libportmidi-dev \
-            libswscale-dev \
-            libavformat-dev \
-            libavcodec-dev \
-            libgstreamer1.0-0 \
-            gstreamer1.0-plugins-base \
-            gstreamer1.0-plugins-good \
             openjdk-17-jdk \
             autoconf-archive \
             gettext \
@@ -75,14 +69,25 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.buildozer
-          key: buildozer-global-${{ hashFiles('buildozer.spec') }}
+          # key 里加 v2：本次修复了交叉编译头文件污染问题，需要让旧的（已污染的）缓存失效
+          key: buildozer-global-v2-${{ hashFiles('buildozer.spec') }}
           restore-keys: |
-            buildozer-global-
+            buildozer-global-v2-
 
       - name: Build APK
         run: |
           unset ANDROID_NDK ANDROID_NDK_HOME ANDROID_NDK_ROOT ANDROID_HOME ANDROID_SDK_ROOT
+          # 关键修复：清空 pkg-config 的搜索路径，禁止它把宿主 Ubuntu 的头文件路径
+          # （/usr/include/SDL2、/usr/include/x86_64-linux-gnu 等）返回给 kivy 的
+          # setup.py，否则交叉编译时会混入宿主 glibc 头文件导致编译失败。
+          export PKG_CONFIG_LIBDIR=""
+          export PKG_CONFIG_PATH=""
+          export PKG_CONFIG_SYSROOT_DIR=""
           buildozer -v android debug
+        env:
+          # 双保险：即使子进程重新推导 pkg-config，也不会读到宿主配置
+          PKG_CONFIG_LIBDIR: ""
+          PKG_CONFIG_PATH: ""
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
