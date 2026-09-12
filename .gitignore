@@ -32,3 +32,9 @@ Thumbs.db
 # ---- 本地临时调试文件（按需补充，避免误入库） ----
 _smoke_*.py
 _scratch_*.py
+_verify_*.py
+
+# ---- 本地备份文件：重构前的旧版 main.py，不参与版本管理 ----
+*.bak
+*.orig
+*.rej
