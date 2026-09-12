@@ -22,5 +22,20 @@ python -m batch_renamer.cli ./photos --prefix "vacation_" --dry-run
 # 执行：确认无误后去掉 --dry-run 并输入 y
 python -m batch_renamer.cli ./photos --prefix "vacation_"
 
-# 撤销上次操作
+# 撤销上次操作（日志默认在 ./photos/rename_log.json）
 python -m batch_renamer.cli ./photos --undo
+
+# 跳过确认直接执行（脚本/自动化场景）
+python -m batch_renamer.cli ./photos --prefix "vacation_" -y
+
+# 指定日志路径（撤销时也要用同一个 --log）
+python -m batch_renamer.cli ./photos --prefix "vacation_" --log /tmp/my_log.json
+python -m batch_renamer.cli --undo --log /tmp/my_log.json
+```
+
+## 行为说明
+
+- **预览/执行/撤销都会返回退出码**：`0` 表示成功或无需处理，`1` 表示失败或有冲突，方便写进脚本。
+- **日志按目录隔离**：不指定 `--log` 时，日志写在目标目录下的 `rename_log.json`，不同目录互不覆盖。
+- **原子性**：执行采用「先改临时名 → 再改最终名」两步法；中途出错会自动回滚，不会留下半截状态。
+- **冲突保护**：当出现「多个文件改成同一个名字」或「覆盖已存在的文件」时会拒绝执行。

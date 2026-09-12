@@ -6,8 +6,11 @@ title = Batch Renamer
 # 包名（应用的唯一标识，格式必须为反向域名，至少两段）
 package.name = batchrenamer
 
-# 包域名（通常与包名对应，可以随便写，但建议用你自己的域名或 github.io）
-package.domain = org.example
+# 包域名（通常与包名对应）
+# 注意：不要用 org.example —— 这是 Android 官方示例域名，
+#       被多数国产 ROM（MIUI/ColorOS/EMUI 等）和安全软件默认拉黑，
+#       会导致 APK「安装被取消 / 被拦截」。
+package.domain = com.xcrylip
 
 # 源代码目录（包含 main.py 的目录，通常是项目根目录）
 source.dir = .
@@ -21,8 +24,15 @@ source.exclude_dirs = tests, bin
 # 主入口文件（Kivy 应用的主文件）
 main.py = main.py
 
-# 版本号
+# 版本号（显示给用户的版本名，例如「0.1」）
 version = 0.1
+
+# Android 内部版本号（必须是整数，且每次发新版必须增大）。
+# 显式指定，避免依赖 buildozer 自动推导：
+#   自动推导会生成类似 1021 这种带构建尾号的数字，版本不可控；
+#   而当版本号不递增时，Android 会拒绝安装（提示「应用未安装 / 版本降级」）。
+# 规则：主版本*10000 + 次版本*100 + 修订号，例如 0.1.0 -> 100。
+android.numeric_version = 100
 
 # 依赖的 Python 模块（会自动通过 pip 安装）
 # 不钉死版本：让 python-for-android 自动匹配 hostpython3，避免出现
@@ -52,10 +62,15 @@ requirements = python3,kivy
 p4a.branch = v2024.01.21
 
 # 需要的权限（Android 权限）
-android.permissions = READ_EXTERNAL_STORAGE, WRITE_EXTERNAL_STORAGE
+# Android 11+ 说明：
+#   READ/WRITE_EXTERNAL_STORAGE 在 API>=30 上基本失效（Scoped Storage）。
+#   MANAGE_EXTERNAL_STORAGE 允许「所有文件访问」，是文件管理类 App 的正确做法。
+#   运行时还需要引导用户到系统设置里手动授予「所有文件访问权限」。
+android.permissions = READ_EXTERNAL_STORAGE, WRITE_EXTERNAL_STORAGE, MANAGE_EXTERNAL_STORAGE
 
-# Android API 级别（建议 31 或更高）
-android.api = 31
+# Android API 级别
+#   API 34 是 Android 14；用较新的目标 API 可避免「专为旧版 Android 打造」拦截。
+android.api = 34
 
 # 最低 Android API 级别
 android.minapi = 21

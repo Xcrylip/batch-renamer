@@ -39,6 +39,7 @@ class ReplaceText(Operation):
 
 class InsertIndex(Operation):
     """在指定位置插入序号，支持自定义起始值、步长、位数、位置（开始或结尾）"""
+
     def __init__(self, start: int = 1, step: int = 1, digits: int = 0, position: str = "end", separator: str = "_"):
         """
         :param start: 起始序号
@@ -53,6 +54,15 @@ class InsertIndex(Operation):
         self.position = position
         self.separator = separator
         self._counter = start  # 内部计数器，每个文件调用一次递增
+
+    def reset(self) -> None:
+        """重置内部计数器。
+
+        重要：每次生成新的重命名计划前必须调用，否则同一个操作对象
+        被复用时（例如用户连续点两次「预览」）计数器会继续累加，
+        导致预览结果与执行结果不一致。
+        """
+        self._counter = self.start
 
     def apply(self, filename: str) -> str:
         index = self._counter
