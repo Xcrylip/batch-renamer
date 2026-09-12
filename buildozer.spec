@@ -29,6 +29,28 @@ version = 0.1
 # "python3 should have same version as hostpython3" 这类版本冲突
 requirements = python3,kivy
 
+# ============================================================
+# 关键修复：把 python-for-android 钉到 v2024.01.21
+# ============================================================
+# 原因：
+#   p4a 的 master/develop 分支（含最新的 v2026.05.09 tag）里，
+#   hostpython3 与 python3 两个 recipe 的 Python 版本已被硬编码为
+#   3.14.2（源码里写死 `version = "3.14.2"`，无法用环境变量覆盖）。
+#
+#   Python 3.14.2 太新，p4a 给这个 Python 建 venv 时 pip 自举会崩：
+#     RAN: bash -c 'source venv/bin/activate && pip install -U pip'
+#     ImportError: cannot import name 'BuildDependencyInstallError'
+#                  from 'pip._internal.exceptions'
+#   这是 p4a 自带 pip 与 Python 3.14 不兼容导致的上游 bug，与本项目无关。
+#
+#   v2024.01.21 是 p4a 最后一个使用 Python 3.11.x 的稳定 tag
+#   （hostpython3 与 python3 recipe 版本均为 3.11.5，内部自洽），
+#   且该版本不包含 fix_ensurepip.patch，走的是成熟稳定的
+#   venv + ensurepip 流程，不会触发上述崩溃。
+#
+#   注意：不要改成 master / develop，否则 Python 版本又会回到 3.14。
+p4a.branch = v2024.01.21
+
 # 需要的权限（Android 权限）
 android.permissions = READ_EXTERNAL_STORAGE, WRITE_EXTERNAL_STORAGE
 

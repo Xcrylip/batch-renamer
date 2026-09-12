@@ -69,10 +69,12 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.buildozer
-          # key 里加 v2：本次修复了交叉编译头文件污染问题，需要让旧的（已污染的）缓存失效
-          key: buildozer-global-v2-${{ hashFiles('buildozer.spec') }}
+          # key 里加 v3：本次把 p4a 从 master(3.14.2) 钉到 v2024.01.21(3.11.5)。
+          # 旧缓存里存的是用 3.14.2 编译的 hostpython/venv 等中间产物，必须让它全部失效，
+          # 否则命中旧缓存会导致 p4a 源码不重新克隆、Python 版本不切换。
+          key: buildozer-global-v3-${{ hashFiles('buildozer.spec') }}
           restore-keys: |
-            buildozer-global-v2-
+            buildozer-global-v3-
 
       - name: Build APK
         run: |
@@ -83,6 +85,20 @@ jobs:
           export PKG_CONFIG_LIBDIR=""
           export PKG_CONFIG_PATH=""
           export PKG_CONFIG_SYSROOT_DIR=""
+
+          # 保险 1：如果 ~/.buildozer 里残留了用 Python 3.14 编译出来的 p4a 产物，
+          # 会导致 p4a.branch 不生效（p4a 已存在就不会重新 clone），脚本直接删掉。
+          P4A_DIR="$HOME/.buildozer/android/platform/python-for-android"
+          if [ -d "$P4A_DIR" ]; then
+            echo "== existing p4a detected, checking version =="
+            if grep -rq '3\.14' "$P4A_DIR/pythonforandroid/recipes/hostpython3/__init__.py" 2>/dev/null; then
+              echo "!! found hostpython3 = 3.14.x, removing stale p4a to force re-clone"
+              rm -rf "$P4A_DIR"
+            fi
+          fi
+          # 同时清掉可能残留的 3.14 构建产物/虚拟环境，避免旧 venv 被复用
+          rm -rf "$HOME/.buildozer/android/platform/build-arm64-v8a_armeabi-v7a/build/venv" || true
+
           buildozer -v android debug
         env:
           # 双保险：即使子进程重新推导 pkg-config，也不会读到宿主配置
