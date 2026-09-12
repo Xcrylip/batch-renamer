@@ -25,7 +25,9 @@ main.py = main.py
 version = 0.1
 
 # 依赖的 Python 模块（会自动通过 pip 安装）
-requirements = python3==3.11,kivy==2.1.0
+# 不钉死版本：让 python-for-android 自动匹配 hostpython3，避免出现
+# "python3 should have same version as hostpython3" 这类版本冲突
+requirements = python3,kivy
 
 # 需要的权限（Android 权限）
 android.permissions = READ_EXTERNAL_STORAGE, WRITE_EXTERNAL_STORAGE
