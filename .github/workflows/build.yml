@@ -58,11 +58,19 @@ jobs:
       - name: Install Python build tools
         run: |
           python -m pip install --upgrade pip setuptools wheel build
-          # 不钉死 cython 版本：新版 python-for-android 需要 cython 3.x
+          # 钉死 cython：p4a v2024.01.21（下方 buildozer.spec 里指定的版本）
+          # 是 Cython 0.29 时代的代码，用 Cython 3.x 编译它的 .pyx 会因
+          # 语言语义变更（如 __index__ 严格化、类型注解处理差异）报错。
+          # 0.29.37 是该系列最后一个稳定版。
+          python -m pip install "cython==0.29.37"
+
       - name: Install Buildozer
         run: |
-          pip install --upgrade pip
-          pip install buildozer
+          # 钉死 buildozer：1.5.0 是长期稳定版，与本项目的 buildozer.spec
+          # 字段、p4a 调用方式完全兼容。不钉版本的话，上游一旦发布破坏性
+          # 更新（比如改掉 spec 字段名、换默认 p4a 分支），CI 会在你完全
+          # 没动代码的情况下突然变红，排查起来极其费劲。
+          python -m pip install "buildozer==1.5.0"
 
       - name: Run tests
         run: |
@@ -76,12 +84,68 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.buildozer
-          # key 里加 v3：本次把 p4a 从 master(3.14.2) 钉到 v2024.01.21(3.11.5)。
-          # 旧缓存里存的是用 3.14.2 编译的 hostpython/venv 等中间产物，必须让它全部失效，
-          # 否则命中旧缓存会导致 p4a 源码不重新克隆、Python 版本不切换。
-          key: buildozer-global-v3-${{ hashFiles('buildozer.spec') }}
+          # key 里加 v4：本次钉死了 cython（0.29.37）与 buildozer（1.5.0），
+          # 构建产物与之前不同，旧缓存里的中间产物必须全部失效。
+          # 历史上 v3 那次是把 p4a 从 master(3.14.2) 钉到 v2024.01.21(3.11.5)，
+          # 旧缓存存的是 3.14.2 编译的 hostpython/venv，命中会导致版本不切换。
+          key: buildozer-global-v4-${{ hashFiles('buildozer.spec') }}
           restore-keys: |
-            buildozer-global-v3-
+            buildozer-global-v4-
+
+      # ⚠️ 顺序很重要：缓存恢复必须在预克隆「之前」。
+      # 否则缓存会把 ~/.buildozer 整体覆盖回去，把刚 clone 好的 p4a 冲掉，
+      # 下面那步的版本校验也就白做了。
+      - name: Pre-clone python-for-android (with retry)
+        env:
+          P4A_BRANCH: v2024.01.21
+        run: |
+          # 为什么要手动预克隆：
+          #   p4a 由 buildozer 在构建过程中自己 git clone，那段代码没有重试逻辑。
+          #   GitHub 到 github.com 的 clone 偶尔会因网络抖动失败（
+          #   "fatal: unable to access ... SSL_ERROR_SYSCALL" / "early EOF"），
+          #   一失败整个构建就挂，重跑一次又要等几十分钟。
+          #   所以这里提前 clone 好，buildozer 检测到目录已存在就会直接复用。
+          set -u
+          P4A_DIR="$HOME/.buildozer/android/platform/python-for-android"
+
+          # 已经是对的版本就直接跳过（缓存命中时走这条路）
+          if [ -d "$P4A_DIR/.git" ]; then
+            CURRENT=$(git -C "$P4A_DIR" describe --tags --always 2>/dev/null || echo "unknown")
+            echo "== existing p4a: $CURRENT =="
+            if [ "$CURRENT" = "$P4A_BRANCH" ]; then
+              echo "== already at $P4A_BRANCH, skip clone =="
+              exit 0
+            fi
+            echo "== wrong branch ($CURRENT != $P4A_BRANCH), removing =="
+            rm -rf "$P4A_DIR"
+          fi
+
+          mkdir -p "$(dirname "$P4A_DIR")"
+
+          MAX_ATTEMPTS=4
+          for i in $(seq 1 $MAX_ATTEMPTS); do
+            echo "===== p4a clone attempt $i / $MAX_ATTEMPTS ====="
+            rm -rf "$P4A_DIR"
+            if git clone --depth 1 --branch "$P4A_BRANCH" \
+                 https://github.com/kivy/python-for-android.git "$P4A_DIR"; then
+              echo "===== clone succeeded on attempt $i ====="
+              echo "== p4a HEAD =="
+              git -C "$P4A_DIR" log -1 --oneline
+              # 顺手校验：确认拿到的确实是 Python 3.11.x，不是 3.14
+              if grep -rq '3\.14' \
+                   "$P4A_DIR/pythonforandroid/recipes/hostpython3/__init__.py" 2>/dev/null; then
+                echo "!! WARNING: hostpython3 is 3.14.x, branch pin did not take effect"
+                exit 1
+              fi
+              echo "== hostpython3 version check passed (not 3.14) =="
+              exit 0
+            fi
+            echo "!! attempt $i failed, backing off..."
+            sleep $((i * 15))
+          done
+
+          echo "!! p4a clone failed after $MAX_ATTEMPTS attempts"
+          exit 1
 
       - name: Build APK
         run: |
