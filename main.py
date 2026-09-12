@@ -10,17 +10,28 @@
       - 文件夹卡片：展示当前路径 + 圆角主按钮
       - 规则卡片：前缀 / 后缀 / 替换 / 插入序号，每项一行「说明 + 圆角输入框」
       - 操作卡片：蓝（预览）/ 绿（执行）/ 橙（撤销）三个圆角按钮
-      - 结果卡片：深色终端风 + 等宽字体，方便对齐看「原名 -> 新名」
+      - 结果卡片：深色终端风，方便对齐看「原名 -> 新名」
 
 实现要点：
     Kivy 原生控件没有圆角 / background_color，本文件用 canvas.before 手绘
     RoundedRectangle 来模拟。所有自绘背景的控件都必须在 pos/size 变化时同步
     canvas（在 Android 上尤其重要，避免旋转屏幕或软键盘弹出后错位）。
+
+中文字体：
+    Kivy 自带的 Roboto 字体**不含任何汉字**，如果不替换默认字体，界面上所有
+    中文都会渲染成"豆腐块"方框（典型表现是每个字都变成一个带叉的方框）。
+    这里的做法是：启动时把 fonts/ 下的文泉驿微米黑注册为 Kivy 的默认字体
+    （'Roboto'），这样所有控件无需逐个指定 font_name 就能正确显示中文。
+
+    注意：源码里不要出现字体不支持的符号（例如各种花式警示符），
+    否则一旦这些字符被显示到界面上，同样会变成方框。当前所用字体的
+    字符覆盖情况可用 fontTools 检查，详见仓库提交记录。
 """
 
 import os
 
 from kivy.app import App
+from kivy.core.text import LabelBase
 from kivy.metrics import dp
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
@@ -46,6 +57,66 @@ except Exception:  # pragma: no cover - 桌面端/CI 环境
 
 
 LOG_NAME = "rename_log.json"
+
+
+# ================= 中文字体注册 =================
+# Kivy 默认字体 Roboto 只有拉丁字母，中文会全部渲染成"带叉的空方框"。
+# （源码注释里请勿出现字体本身不支持的符号，详见下方"源码字符约束"说明。）
+# 解决方式：把仓库内 fonts/ 目录下的中文字体注册成 Kivy 的默认字体名
+# 'Roboto'，这样所有控件（不区分是 Label / Button / TextInput）都会用它，
+# 不需要在每个控件上单独写 font_name。
+#
+# 找不到字体时的降级策略：
+#   直接跳过注册，界面仍能启动，只是中文会显示为方框 —— 比启动即崩溃好。
+#   同时把原因记录下来，方便排查（APK 里字体没打进包是最可能的原因）。
+
+FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+# 候选字体按优先级排列。首选 .ttf（单字体文件）：
+#   Kivy 使用 SDL2_ttf 加载字体，对「字体集合」（.ttc，一个文件里塞多个字重）
+#   的支持并不总是可靠 —— 老版本 SDL2_ttf 会只认第一个字体，或者干脆报错。
+#   .ttf 是单一 sfnt 字体，兼容性最好，因此排在第一位。
+#   .ttc 版本仍然保留为次选（万一 ttf 被漏提交，还有它兜底）。
+#   注意：本仓库当前只提交了 .ttf；.ttc 已删除以避免重复占用 ~4.9MB 体积
+#   （经验证 TTF 与 TTC 第一个字重的 cmap 完全一致）。
+FONT_CANDIDATES = (
+    "WenQuanYiMicroHei.ttf",
+    "WenQuanYiMicroHei.ttc",
+    "NotoSansSC-Regular.otf",
+    "SourceHanSansSC-Regular.otf",
+)
+_FONT_LOADED = None  # None=未尝试, str=成功路径, False=失败
+
+
+def register_chinese_font():
+    """把中文字体注册为 Kivy 的默认字体，返回是否成功。
+
+    可重复调用（结果会缓存），因此在 App.build() 里调用是安全的。
+    """
+    global _FONT_LOADED
+    if _FONT_LOADED is not None:
+        return bool(_FONT_LOADED)
+
+    for name in FONT_CANDIDATES:
+        path = os.path.join(FONT_DIR, name)
+        if not os.path.isfile(path):
+            continue
+        try:
+            # 注册为 'Roboto' —— 覆盖 Kivy 的默认字体名，
+            # 这样所有未显式指定 font_name 的控件都会自动使用它。
+            LabelBase.register(name="Roboto", fn_regular=path)
+            _FONT_LOADED = path
+            return True
+        except Exception as exc:  # pragma: no cover - 依赖运行环境
+            print(f"[font] 注册中文字体失败 {path}: {exc}")
+            continue
+
+    _FONT_LOADED = False
+    print(
+        "[font] 未找到可用的中文字体，中文可能显示为方框。"
+        f" 期望目录: {FONT_DIR}"
+    )
+    return False
+
 
 # ================= 配色（现代浅色主题） =================
 COLOR_BG = (0.945, 0.949, 0.961, 1)       # 页面背景（浅灰）
@@ -221,6 +292,11 @@ class LabeledField(BoxLayout):
 class BatchRenamerApp(App):
     def build(self):
         self.title = "批量重命名工具"
+
+        # 最先注册中文字体 —— 必须早于任何控件的创建，
+        # 否则已经创建的控件仍会沿用 Roboto（中文变豆腐块）。
+        register_chinese_font()
+
         self.selected_folder = ""
         self.plan = None
 
@@ -657,7 +733,7 @@ class BatchRenamerApp(App):
 
         if self.plan.has_conflicts():
             lines.append("")
-            lines.append("⚠ 警告：存在重命名冲突！")
+            lines.append("!! 警告：存在重命名冲突！")
             for name in self.plan.conflicts():
                 lines.append(f"  冲突: {os.path.basename(name)}")
 

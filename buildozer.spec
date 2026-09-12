@@ -16,13 +16,17 @@ package.domain = com.xcrylip
 source.dir = .
 
 # 需要包含的源代码文件或目录（多个用逗号分隔，默认包含所有）
-source.include_exts = py,png,jpg,kv,atlas
+# 注意：必须包含 ttf/ttc，否则 fonts/ 下的中文字体不会被打进 APK，
+#       应用启动后找不到字体，界面上的中文会显示成 ☒（豆腐块）。
+source.include_exts = py,png,jpg,kv,atlas,ttf,ttc,otf
 
 # 排除的文件或目录
 source.exclude_dirs = tests, bin
 
 # 主入口文件（Kivy 应用的主文件）
-main.py = main.py
+# 说明：buildozer 会自动使用 source.dir 下的 main.py，无需额外声明；
+#       此前误写为 `main.py = main.py`（不是合法的 buildozer 配置键，
+#       会被静默忽略），这里删除以免误导。
 
 # 版本号（显示给用户的版本名，例如「0.1」）
 version = 0.1

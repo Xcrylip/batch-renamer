@@ -12,6 +12,51 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Verify bundled Chinese font
+        run: |
+          # 中文渲染修复的守门员。背景：Kivy 自带 Roboto 不含任何汉字，
+          # 若不替换默认字体，界面上所有中文都会渲染成"带叉的空方框"。
+          # 修复依赖仓库里的 fonts/WenQuanYiMicroHei.ttc 被打进 APK，
+          # 而它是个 5MB 的二进制文件 —— 一旦被 .gitignore 误伤、LFS 配置出错
+          # 或提交时漏掉，构建照样"成功"，只是装到手机上中文全变方框，
+          # 极难排查。所以这里在花十几分钟编译之前先做硬校验，快速失败。
+          set -euo pipefail
+          FONT="fonts/WenQuanYiMicroHei.ttf"
+          if [ ! -f "$FONT" ]; then
+            FONT="fonts/WenQuanYiMicroHei.ttc"
+          fi
+          if [ ! -f "$FONT" ]; then
+            echo "::error::缺少中文字体（ttf / ttc 均未找到）—— APK 将无法渲染中文"
+            exit 1
+          fi
+          echo "使用字体: $FONT"
+          SIZE=$(stat -c%s "$FONT")
+          echo "字体文件大小: $SIZE 字节"
+          # 已知完整字体为 4.6MB(ttf) / 5.1MB(ttc)。小于 4MB 说明下载/提交被截断
+          # （本项目历史上就踩过这个坑：2.9MB 的半截文件结构看似正常）。
+          if [ "$SIZE" -lt 4000000 ]; then
+            echo "::error::$FONT 只有 $SIZE 字节，疑似被截断"
+            exit 1
+          fi
+          # 确认字体能被解析、且真的含汉字，而不是只有拉丁字形的假字体。
+          python -m pip install --quiet fonttools
+          FONT_PATH="$FONT" python - <<'PY'
+          import os, sys
+          from fontTools.ttLib import TTFont, TTCollection
+          path = os.environ["FONT_PATH"]
+          if path.endswith(".ttc"):
+              cmaps = [set(f.getBestCmap().keys()) for f in TTCollection(path).fonts]
+          else:
+              cmaps = [set(TTFont(path).getBestCmap().keys())]
+          print(f"字体份数: {len(cmaps)}, 码点数: {[len(m) for m in cmaps]}")
+          probe = "批量重命名选择文件夹插入序号预览执行撤销"
+          missing = sorted({c for c in probe if not any(ord(c) in m for m in cmaps)})
+          if missing:
+              print(f"::error::字体缺少汉字字形: {missing}")
+              sys.exit(1)
+          print("字体校验通过：中文可正常渲染")
+          PY
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:

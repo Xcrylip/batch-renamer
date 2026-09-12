@@ -1,0 +1,34 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- 虚拟环境 ----
+.venv/
+venv/
+env/
+
+# ---- buildozer / python-for-android 构建产物 ----
+# 注意：不要忽略 fonts/ 目录！中文字体必须打进 APK，
+# 否则界面上所有中文会渲染成"带叉的空方框"。
+.bin/
+.buildozer/
+*.apk
+*.aab
+*.idsig
+bin/
+
+# ---- 编辑器 / 系统 ----
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# ---- 本地临时调试文件（按需补充，避免误入库） ----
+_smoke_*.py
+_scratch_*.py
