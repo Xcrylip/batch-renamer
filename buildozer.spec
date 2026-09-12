@@ -29,14 +29,16 @@ source.exclude_dirs = tests, bin
 #       会被静默忽略），这里删除以免误导。
 
 # 版本号（显示给用户的版本名，例如「0.1」）
-version = 0.1
+# 0.1.1: 修复横屏问题（buildozer.spec 补 orientation=portrait）
+version = 0.1.1
 
 # Android 内部版本号（必须是整数，且每次发新版必须增大）。
 # 显式指定，避免依赖 buildozer 自动推导：
 #   自动推导会生成类似 1021 这种带构建尾号的数字，版本不可控；
 #   而当版本号不递增时，Android 会拒绝安装（提示「应用未安装 / 版本降级」）。
 # 规则：主版本*10000 + 次版本*100 + 修订号，例如 0.1.0 -> 100。
-android.numeric_version = 100
+# 100 -> 101: 横屏修复版，保证能覆盖安装旧包，无需卸载。
+android.numeric_version = 101
 
 # 依赖的 Python 模块（会自动通过 pip 安装）
 # 不钉死版本：让 python-for-android 自动匹配 hostpython3，避免出现
@@ -87,6 +89,26 @@ android.androidx = True
 
 # 应用图标（可选，不设置会使用默认）
 # icon.filename = %(source.dir)s/icon.png
+
+# ============================================================
+# 屏幕方向（关键）
+# ============================================================
+# 取值：portrait=竖屏 / landscape=横屏 / all=跟随重力感应 / sensor=传感器
+#
+# ⚠️ 为什么必须显式写：python-for-android 对 screenOrientation 的
+#    默认值是 landscape（横屏，历史原因——它早期主要面向游戏场景）。
+#    不写这一行，AndroidManifest.xml 里就会生成
+#    android:screenOrientation="landscape"，于是竖着拿手机界面也是横的。
+#
+# 本工具是文件列表类 UI，竖屏更符合使用习惯，故锁定 portrait。
+orientation = portrait
+
+# ============================================================
+# 全屏
+# ============================================================
+# 0 = 显示状态栏（推荐，用户可以随时看到电量/时间）
+# 1 = 隐藏状态栏（沉浸式，多见于游戏）
+fullscreen = 0
 
 # 日志级别
 log_level = 2
