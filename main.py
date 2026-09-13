@@ -36,6 +36,7 @@ from kivy.uix.scrollview import ScrollView
 from kivy.uix.textinput import TextInput
 from kivy.uix.switch import Switch
 from kivy.uix.widget import Widget
+from kivy.properties import NumericProperty
 from kivy.animation import Animation
 from kivy.graphics import Color, Line, Rectangle, RoundedRectangle
 
@@ -172,15 +173,25 @@ class Card(BoxLayout):
 
 
 class RoundButton(Button):
-    """圆角按钮（对标 Shizuku 手感：按压回弹 + 颜色过渡 + 投影）。
+    """圆角按钮（对标 Shizuku 手感：按压回弹 + 颜色过渡）。
 
     设计要点：
       * 背景用自绘 RoundedRectangle，按钮自身背景透明；
-      * 按下时整体轻微缩放（0.94）并平移到按压色，松开弹回；
-      * 颜色变化走 Animation 过渡，而不是硬切，手感更「跟手」；
-      * 可选 icon_line=True 时，用 Line 画一个真正的「‹」箭头（或自定义折线），
+      * 按下时背景轻微内缩（视觉缩放）+ 变色，松开弹回，避免布局抖动；
+      * 颜色/内缩都走 Animation 过渡，而不是硬切，手感更「跟手」；
+      * icon="back" 时用 Line 画一个真正的「‹」箭头（自定义折线），
         不依赖字体里的符号字形，避免出现方块。
+
+    稳健性说明（真机闪退修复）：
+      * scale_hint 现在是一个真正的 Kivy 数值属性（NumericProperty），
+        这样 Animation / Animation.cancel_all 对它操作才是合法的
+        —— 之前它是普通 Python 属性，真机上 cancel_all 会直接抛异常。
+      * _on_state / _layout_icon 全程 try/except 兜底：任何绘制或动画异常
+        都不得冒泡，否则会连锁导致 App 崩溃。
     """
+
+    # 真正的 Kivy 属性：按压缩放系数（同时驱动背景内缩）
+    scale_hint = NumericProperty(1.0)
 
     def __init__(self, bg=COLOR_PRIMARY, bg_down=COLOR_PRIMARY_D,
                  radius=None, icon=None, **kwargs):
@@ -190,7 +201,6 @@ class RoundButton(Button):
         kwargs.setdefault("font_size", "15sp")
         kwargs.setdefault("size_hint_y", None)
         kwargs.setdefault("height", dp(44))
-        # icon 与 text 同时存在时，让文字略微右移给图标留位置（由调用方控制）
         super().__init__(**kwargs)
         self._radius = [radius if radius is not None else RADIUS]
 
@@ -200,59 +210,83 @@ class RoundButton(Button):
                 pos=self.pos, size=self.size, radius=self._radius
             )
         # 箭头（可选）：用折线画，不依赖字体符号
-        self._icon = None
         self._icon_line = None
+        self._icon_c = None
         if icon == "back":
             with self.canvas.after:
                 self._icon_c = Color(1, 1, 1, 1)
                 self._icon_line = Line(points=[], width=dp(2.2),
                                        cap="round", joint="round",
                                        close=False)
-        self._bg = bg
-        self._bg_down = bg_down
+        self._bg = tuple(bg)
+        self._bg_down = tuple(bg_down)
 
         def _upd(w, *a):
-            w._rr.pos = w.pos
-            w._rr.size = w.size
-            w._rr.radius = w._radius
-            w._layout_icon()
+            try:
+                w._rr.pos = w.pos
+                w._rr.size = w.size
+                w._rr.radius = w._radius
+                w._layout_icon()
+            except Exception:
+                pass
 
         self.bind(pos=_upd, size=_upd)
         self.bind(state=self._on_state)
+        # 首次摆一次（有些设备首帧不触发 size 绑定）
+        try:
+            _upd(self)
+        except Exception:
+            pass
 
     # ---------- 箭头绘制 ----------
     def _layout_icon(self):
         """在按钮左侧画一个「‹」箭头。"""
-        if self._icon_line is None:
-            return
-        w, h = self.width, self.height
-        cx = self.x + w * 0.5
-        cy = self.y + h * 0.5
-        # 箭头尺寸随按钮高度自适应
-        s = min(h * 0.28, dp(14))
-        dx = s * 0.72
-        self._icon_line.points = [
-            cx + dx, cy + s,
-            cx - dx, cy,
-            cx + dx, cy - s,
-        ]
+        try:
+            if self._icon_line is None:
+                return
+            w, h = self.width, self.height
+            if w <= 0 or h <= 0:
+                return
+            cx = self.x + w * 0.5
+            cy = self.y + h * 0.5
+            # 箭头尺寸随按钮高度自适应
+            s = max(min(h * 0.28, dp(14)), dp(4))
+            dx = s * 0.72
+            self._icon_line.points = [
+                cx + dx, cy + s,
+                cx - dx, cy,
+                cx + dx, cy - s,
+            ]
+        except Exception:
+            # 绘制失败绝不能拖垮界面
+            pass
 
     # ---------- 状态动画 ----------
     def _on_state(self, widget, state):
-        down = (state == "down")
-        # 颜色过渡（0.08s，接近原生 material 的手感）
-        Animation.cancel_all(self._c, "rgba")
-        target = self._bg_down if down else self._bg
-        Animation(rgba=list(target), d=0.09,
-                  t="out_quad").start(self._c)
-        # 轻微缩放：改变按钮自身 size/pos 会牵动布局，所以这里只做视觉缩放
-        # —— 通过调整背景矩形与图标的内缩量实现，避免布局抖动。
-        Animation.cancel_all(self, "scale_hint")
-        self.scale_hint = 0.94 if down else 1.0
+        try:
+            down = (state == "down")
+            # 颜色过渡（0.09s，接近原生 material 的手感）
+            Animation.cancel_all(self._c, "rgba")
+            target = self._bg_down if down else self._bg
+            Animation(rgba=list(target), d=0.09,
+                      t="out_quad").start(self._c)
+            # 视觉缩放：用真正的 Kivy 属性 scale_hint 驱动，0.94 / 1.0
+            Animation.cancel_all(self, "scale_hint")
+            Animation(scale_hint=(0.94 if down else 1.0),
+                      d=0.09, t="out_quad").start(self)
+        except Exception:
+            # 动画失败也不能崩：退化为直接设色
+            try:
+                self._c.rgba = list(self._bg_down if state == "down" else self._bg)
+            except Exception:
+                pass
 
-    # 供动画驱动的最小属性（不影响真实布局）
+    # 供动画驱动：scale_hint 变化时刷新箭头与背景内缩
     def on_scale_hint(self, *a):
-        self._layout_icon()
+        try:
+            self._layout_icon()
+        except Exception:
+            pass
 
 
 class FieldInput(TextInput):
