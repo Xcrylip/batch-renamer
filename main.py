@@ -30,6 +30,7 @@ from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.label import Label
 from kivy.uix.popup import Popup
+from kivy.uix.relativelayout import RelativeLayout
 from kivy.uix.screenmanager import Screen, ScreenManager, SlideTransition
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.textinput import TextInput
@@ -797,35 +798,41 @@ class HomeScreen(Screen):
         # 功能入口
         page = BoxLayout(
             orientation="vertical",
+            size_hint_y=None,
             padding=[dp(16), dp(10), dp(16), dp(20)],
             spacing=dp(14),
         )
+        page.bind(minimum_height=page.setter("height"))
         page.add_widget(self._entry_button(
             "加前/后缀", "给文件名加前缀、加后缀", PrefixSuffixScreen, COLOR_PRIMARY))
         page.add_widget(self._entry_button(
             "查找替换", "把文件名里的某些文字换掉", ReplaceScreen, COLOR_SUCCESS))
         page.add_widget(self._entry_button(
             "插入序号", "给文件按顺序编号", IndexScreen, COLOR_WARN))
-        page.add_widget(Widget())  # 底部弹簧
         root.add_widget(page)
+        root.add_widget(Widget())  # 底部弹簧，吃掉剩余空间
 
         self._refresh_folder_label()
 
     def _entry_button(self, title, subtitle, screen_cls, color):
-        """构造一个入口卡片（标题 + 说明 + 箭头）。"""
-        btn = Button(
-            background_normal="",
-            background_color=(0, 0, 0, 0),
+        """构造一个入口卡片（标题 + 说明 + 箭头）。
+
+        实现要点（避免「按钮空白 + 点击闪退」）：
+          * 用 RoundButton，它自带圆角背景与按压态；
+          * 内部文字用一个 RelativeLayout 作为子控件「真正挂载」到按钮上，
+            而不是只 bind pos/size —— 之前 inner 从未 add_widget(btn)，
+            导致它不在渲染树里：既看不见文字，点击时也拿不到内容。
+        """
+        btn = RoundButton(
+            text="",
+            bg=color,
+            bg_down=color,
             size_hint_y=None,
             height=dp(76),
         )
-        _draw_round(btn, color)
 
-        inner = BoxLayout(
-            orientation="vertical",
-            padding=[dp(18), dp(10), dp(18), dp(10)],
-            spacing=dp(2),
-        )
+        # 用 RelativeLayout 让内部内容随按钮自动布局
+        inner = RelativeLayout()
         t1 = Label(
             text=title,
             color=(1, 1, 1, 1),
@@ -833,6 +840,7 @@ class HomeScreen(Screen):
             bold=True,
             halign="left",
             valign="middle",
+            size_hint=(None, None),
         )
         t1.bind(size=lambda w, s: setattr(w, "text_size", s))
         t2 = Label(
@@ -841,15 +849,33 @@ class HomeScreen(Screen):
             font_size="12sp",
             halign="left",
             valign="middle",
+            size_hint=(None, None),
         )
         t2.bind(size=lambda w, s: setattr(w, "text_size", s))
+
+        def _layout_inner(w, *a):
+            """把标题/说明按按钮实际尺寸摆放。"""
+            pad = dp(18)
+            inner.pos = w.pos
+            inner.size = w.size
+            w1 = max(dp(1), w.width - pad * 2)
+            h1 = dp(30)
+            h2 = dp(22)
+            total = h1 + dp(2) + h2
+            top = w.y + (w.height + total) / 2.0
+            # 顶部标题
+            t1.size = (w1, h1)
+            t1.text_size = (w1, h1)
+            t1.pos = (w.x + pad, top - h1)
+            # 底部说明
+            t2.size = (w1, h2)
+            t2.text_size = (w1, h2)
+            t2.pos = (w.x + pad, top - h1 - dp(2) - h2)
+
         inner.add_widget(t1)
         inner.add_widget(t2)
-
-        # 让内部布局跟随按钮尺寸
-        btn.bind(pos=lambda w, p: setattr(inner, "pos", w.pos))
-        btn.bind(size=lambda w, s: setattr(inner, "size", w.size))
-        inner.disabled = True  # 不拦截点击
+        btn.add_widget(inner)              # ★ 关键：真正挂载，才能显示文字
+        btn.bind(pos=_layout_inner, size=_layout_inner)
 
         btn.bind(on_release=lambda *a: self.app_ref.go_screen(screen_cls))
         return btn
@@ -887,6 +913,7 @@ class BatchRenamerApp(App):
 
         self.sm = ScreenManager(transition=SlideTransition())
         self.home = HomeScreen(app_ref=self)
+        self.home.name = "home"
         self.sm.add_widget(self.home)
         return self.sm
 
@@ -895,8 +922,12 @@ class BatchRenamerApp(App):
 
     # ---------- 导航 ----------
     def go_home(self):
-        self.sm.transition.direction = "right"
-        self.sm.current = self.home
+        """回到首页。"""
+        try:
+            self.sm.transition.direction = "right"
+        except Exception:
+            pass
+        self.sm.current = "home"
 
     def go_screen(self, screen_cls):
         """切到某个功能页（首次访问时创建）。"""
@@ -909,7 +940,7 @@ class BatchRenamerApp(App):
         scr.selected_folder = self.selected_folder
         scr._refresh_folder_label()
         self.sm.transition.direction = "left"
-        self.sm.current = scr
+        self.sm.current = scr.name
 
     def refresh_folder_labels(self):
         """文件夹变化后，同步刷新所有页面上的显示。"""
