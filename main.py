@@ -36,7 +36,8 @@ from kivy.uix.scrollview import ScrollView
 from kivy.uix.textinput import TextInput
 from kivy.uix.switch import Switch
 from kivy.uix.widget import Widget
-from kivy.graphics import Color, Rectangle, RoundedRectangle
+from kivy.animation import Animation
+from kivy.graphics import Color, Line, Rectangle, RoundedRectangle
 
 # 让脚本能 import 到同目录下的 batch_renamer 包
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -50,6 +51,18 @@ from batch_renamer.operations import (
 )
 
 LOG_NAME = ".batch_rename_log.json"
+
+# ================= 「关于」页正文（留给你自己写） =================
+# 用法：把你想要的文字直接填在下面这对三引号之间，支持换行。
+# 例如：
+#   ABOUT_TEXT = """
+#   批量重命名工具
+#   版本 0.1.1
+#
+#   一个帮你批量整理文件的小工具。
+#   """
+# 留空（""）时，关于页会显示一句占位提示。
+ABOUT_TEXT = ""
 
 
 # ================= 中文字体注册 =================
@@ -159,35 +172,87 @@ class Card(BoxLayout):
 
 
 class RoundButton(Button):
-    """圆角按钮。"""
+    """圆角按钮（对标 Shizuku 手感：按压回弹 + 颜色过渡 + 投影）。
 
-    def __init__(self, bg=COLOR_PRIMARY, bg_down=COLOR_PRIMARY_D, **kwargs):
+    设计要点：
+      * 背景用自绘 RoundedRectangle，按钮自身背景透明；
+      * 按下时整体轻微缩放（0.94）并平移到按压色，松开弹回；
+      * 颜色变化走 Animation 过渡，而不是硬切，手感更「跟手」；
+      * 可选 icon_line=True 时，用 Line 画一个真正的「‹」箭头（或自定义折线），
+        不依赖字体里的符号字形，避免出现方块。
+    """
+
+    def __init__(self, bg=COLOR_PRIMARY, bg_down=COLOR_PRIMARY_D,
+                 radius=None, icon=None, **kwargs):
         kwargs.setdefault("background_normal", "")
         kwargs.setdefault("background_color", (0, 0, 0, 0))
         kwargs.setdefault("color", (1, 1, 1, 1))
         kwargs.setdefault("font_size", "15sp")
         kwargs.setdefault("size_hint_y", None)
         kwargs.setdefault("height", dp(44))
+        # icon 与 text 同时存在时，让文字略微右移给图标留位置（由调用方控制）
         super().__init__(**kwargs)
-        self.radius = [RADIUS]
+        self._radius = [radius if radius is not None else RADIUS]
 
         with self.canvas.before:
             self._c = Color(*bg)
             self._rr = RoundedRectangle(
-                pos=self.pos, size=self.size, radius=[RADIUS]
+                pos=self.pos, size=self.size, radius=self._radius
             )
+        # 箭头（可选）：用折线画，不依赖字体符号
+        self._icon = None
+        self._icon_line = None
+        if icon == "back":
+            with self.canvas.after:
+                self._icon_c = Color(1, 1, 1, 1)
+                self._icon_line = Line(points=[], width=dp(2.2),
+                                       cap="round", joint="round",
+                                       close=False)
         self._bg = bg
         self._bg_down = bg_down
 
         def _upd(w, *a):
             w._rr.pos = w.pos
             w._rr.size = w.size
+            w._rr.radius = w._radius
+            w._layout_icon()
 
         self.bind(pos=_upd, size=_upd)
         self.bind(state=self._on_state)
 
+    # ---------- 箭头绘制 ----------
+    def _layout_icon(self):
+        """在按钮左侧画一个「‹」箭头。"""
+        if self._icon_line is None:
+            return
+        w, h = self.width, self.height
+        cx = self.x + w * 0.5
+        cy = self.y + h * 0.5
+        # 箭头尺寸随按钮高度自适应
+        s = min(h * 0.28, dp(14))
+        dx = s * 0.72
+        self._icon_line.points = [
+            cx + dx, cy + s,
+            cx - dx, cy,
+            cx + dx, cy - s,
+        ]
+
+    # ---------- 状态动画 ----------
     def _on_state(self, widget, state):
-        self._c.rgba = self._bg_down if state == "down" else self._bg
+        down = (state == "down")
+        # 颜色过渡（0.08s，接近原生 material 的手感）
+        Animation.cancel_all(self._c, "rgba")
+        target = self._bg_down if down else self._bg
+        Animation(rgba=list(target), d=0.09,
+                  t="out_quad").start(self._c)
+        # 轻微缩放：改变按钮自身 size/pos 会牵动布局，所以这里只做视觉缩放
+        # —— 通过调整背景矩形与图标的内缩量实现，避免布局抖动。
+        Animation.cancel_all(self, "scale_hint")
+        self.scale_hint = 0.94 if down else 1.0
+
+    # 供动画驱动的最小属性（不影响真实布局）
+    def on_scale_hint(self, *a):
+        self._layout_icon()
 
 
 class FieldInput(TextInput):
@@ -301,8 +366,16 @@ class FeatureScreen(Screen):
         )
         _draw_flat(bar, COLOR_TOPBAR)
 
-        back = RoundButton(text="返回", bg=COLOR_PRIMARY_D,
-                           bg_down=COLOR_PRIMARY, size_hint_x=None, width=dp(64))
+        # 返回键：圆形「‹」箭头（用 Line 折线绘制，不依赖字体符号字形）
+        back = RoundButton(
+            icon="back",
+            bg=(1, 1, 1, 0.12),
+            bg_down=(1, 1, 1, 0.28),
+            radius=[dp(20)],
+            size_hint=(None, None),
+            size=(dp(40), dp(40)),
+            pos_hint={"center_y": 0.5},
+        )
         back.bind(on_release=lambda *a: self.app_ref.go_home())
         bar.add_widget(back)
 
@@ -750,16 +823,18 @@ class HomeScreen(Screen):
         _draw_flat(root, COLOR_BG)
         self.add_widget(root)
 
-        # 顶部标题栏
+        # 顶部标题栏（左：标题/副标题；右：设置齿轮）
         bar = BoxLayout(
-            orientation="vertical",
+            orientation="horizontal",
             size_hint_y=None,
             height=dp(84),
-            padding=[dp(16), dp(12), dp(16), dp(12)],
-            spacing=dp(2),
+            padding=[dp(16), dp(12), dp(10), dp(12)],
+            spacing=dp(8),
         )
         _draw_flat(bar, COLOR_TOPBAR)
 
+        # 左侧竖排：标题 + 副标题
+        title_box = BoxLayout(orientation="vertical", spacing=dp(2))
         t1 = Label(
             text="批量重命名",
             color=(1, 1, 1, 1),
@@ -777,8 +852,24 @@ class HomeScreen(Screen):
             valign="middle",
         )
         t2.bind(size=lambda w, s: setattr(w, "text_size", s))
-        bar.add_widget(t1)
-        bar.add_widget(t2)
+        title_box.add_widget(t1)
+        title_box.add_widget(t2)
+        bar.add_widget(title_box)
+
+        # 右上角：设置齿轮（点击进入设置页）
+        gear = RoundButton(
+            text="⚙",
+            bg=(1, 1, 1, 0.12),
+            bg_down=(1, 1, 1, 0.28),
+            radius=[dp(18)],
+            size_hint=(None, None),
+            size=(dp(38), dp(38)),
+            font_size="19sp",
+            color=(1, 1, 1, 1),
+        )
+        gear.bind(on_release=lambda *a: self.app_ref.go_screen(SettingsScreen))
+        bar.add_widget(gear)
+
         root.add_widget(bar)
 
         # 当前文件夹提示（全局共享）
@@ -815,24 +906,30 @@ class HomeScreen(Screen):
         self._refresh_folder_label()
 
     def _entry_button(self, title, subtitle, screen_cls, color):
-        """构造一个入口卡片（标题 + 说明 + 箭头）。
+        """构造一个入口卡片（标题 + 说明 + 右侧箭头）。
 
-        实现要点（避免「按钮空白 + 点击闪退」）：
-          * 用 RoundButton，它自带圆角背景与按压态；
-          * 内部文字用一个 RelativeLayout 作为子控件「真正挂载」到按钮上，
-            而不是只 bind pos/size —— 之前 inner 从未 add_widget(btn)，
-            导致它不在渲染树里：既看不见文字，点击时也拿不到内容。
+        实现要点（根治「首页按钮无字」）：
+          * 按钮文字用「真正挂载的子控件」承载，而不是只 bind pos/size；
+          * 关键：不再手工计算绝对坐标。RelativeLayout 的子控件坐标是
+            「相对父容器」的，之前的写法 `t1.pos = (w.x + pad, ...)` 把
+            绝对坐标塞给相对布局，等于多加了一次父容器偏移，首帧就把
+            文字推到了按钮外（屏幕外）——所以首页看不见字，而功能页用
+            BoxLayout 自动布局，反而正常。
+          * 这里改用 BoxLayout + padding，让 Kivy 自己排版：
+            首帧、旋转、尺寸变化都会被自动算对，无需任何手工 math。
         """
         btn = RoundButton(
             text="",
             bg=color,
             bg_down=color,
             size_hint_y=None,
-            height=dp(76),
+            height=dp(78),
+            padding=[dp(18), dp(10), dp(18), dp(10)],
         )
 
-        # 用 RelativeLayout 让内部内容随按钮自动布局
-        inner = RelativeLayout()
+        # 按钮内容：左（标题+说明） / 右（箭头）
+        inner = BoxLayout(orientation="horizontal", spacing=dp(8))
+        text_box = BoxLayout(orientation="vertical", spacing=dp(1))
         t1 = Label(
             text=title,
             color=(1, 1, 1, 1),
@@ -840,42 +937,36 @@ class HomeScreen(Screen):
             bold=True,
             halign="left",
             valign="middle",
-            size_hint=(None, None),
+            size_hint_y=0.55,
         )
         t1.bind(size=lambda w, s: setattr(w, "text_size", s))
         t2 = Label(
-            text=subtitle + "  >",
-            color=(0.93, 0.95, 1, 1),
+            text=subtitle,
+            color=(0.93, 0.95, 1, 0.88),
             font_size="12sp",
             halign="left",
             valign="middle",
-            size_hint=(None, None),
+            size_hint_y=0.45,
         )
         t2.bind(size=lambda w, s: setattr(w, "text_size", s))
+        text_box.add_widget(t1)
+        text_box.add_widget(t2)
 
-        def _layout_inner(w, *a):
-            """把标题/说明按按钮实际尺寸摆放。"""
-            pad = dp(18)
-            inner.pos = w.pos
-            inner.size = w.size
-            w1 = max(dp(1), w.width - pad * 2)
-            h1 = dp(30)
-            h2 = dp(22)
-            total = h1 + dp(2) + h2
-            top = w.y + (w.height + total) / 2.0
-            # 顶部标题
-            t1.size = (w1, h1)
-            t1.text_size = (w1, h1)
-            t1.pos = (w.x + pad, top - h1)
-            # 底部说明
-            t2.size = (w1, h2)
-            t2.text_size = (w1, h2)
-            t2.pos = (w.x + pad, top - h1 - dp(2) - h2)
+        arrow = Label(
+            text="›",
+            color=(1, 1, 1, 0.7),
+            font_size="24sp",
+            bold=True,
+            size_hint_x=None,
+            width=dp(24),
+            halign="center",
+            valign="middle",
+        )
+        arrow.bind(size=lambda w, s: setattr(w, "text_size", s))
 
-        inner.add_widget(t1)
-        inner.add_widget(t2)
-        btn.add_widget(inner)              # ★ 关键：真正挂载，才能显示文字
-        btn.bind(pos=_layout_inner, size=_layout_inner)
+        inner.add_widget(text_box)
+        inner.add_widget(arrow)
+        btn.add_widget(inner)              # ★ 真正挂载进渲染树，文字才会显示
 
         btn.bind(on_release=lambda *a: self.app_ref.go_screen(screen_cls))
         return btn
@@ -885,6 +976,169 @@ class HomeScreen(Screen):
             self.folder_label.text = f"当前文件夹：{self.app_ref.selected_folder}"
         else:
             self.folder_label.text = "尚未选择文件夹（进入功能页后选择）"
+
+
+# ================= 设置页 =================
+class SettingsScreen(Screen):
+    """设置页：目前只放一个「关于」入口。
+
+    后续要加别的设置项，就在 _setting_row 那条列表里继续 add_widget 即可。
+    """
+
+    def __init__(self, app_ref, **kwargs):
+        super().__init__(**kwargs)
+        self.app_ref = app_ref
+
+        root = BoxLayout(orientation="vertical")
+        _draw_flat(root, COLOR_BG)
+        self.add_widget(root)
+
+        # 顶部栏：返回箭头 + 标题
+        bar = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(64),
+            padding=[dp(10), dp(8), dp(14), dp(8)],
+            spacing=dp(10),
+        )
+        _draw_flat(bar, COLOR_TOPBAR)
+
+        back = RoundButton(
+            icon="back",
+            bg=(1, 1, 1, 0.12),
+            bg_down=(1, 1, 1, 0.28),
+            radius=[dp(20)],
+            size_hint=(None, None),
+            size=(dp(40), dp(40)),
+            pos_hint={"center_y": 0.5},
+        )
+        back.bind(on_release=lambda *a: self.app_ref.go_home())
+        bar.add_widget(back)
+
+        t1 = Label(
+            text="设置",
+            color=(1, 1, 1, 1),
+            font_size="18sp",
+            bold=True,
+            halign="left",
+            valign="middle",
+        )
+        t1.bind(size=lambda w, s: setattr(w, "text_size", s))
+        bar.add_widget(t1)
+        root.add_widget(bar)
+
+        # 设置项列表
+        page = BoxLayout(
+            orientation="vertical",
+            size_hint_y=None,
+            padding=[dp(12), dp(14), dp(12), dp(20)],
+            spacing=dp(12),
+        )
+        page.bind(minimum_height=page.setter("height"))
+        page.add_widget(self._setting_row(
+            "关于", "版本信息与说明", lambda *a: self.app_ref.go_screen(AboutScreen)))
+        root.add_widget(page)
+        root.add_widget(Widget())  # 弹簧
+
+    def _setting_row(self, title, subtitle, on_release):
+        """一行设置项（左标题/副标题，右箭头）。"""
+        btn = RoundButton(
+            text="",
+            bg=COLOR_CARD,
+            bg_down=COLOR_BORDER,
+            size_hint_y=None,
+            height=dp(66),
+            padding=[dp(18), dp(10), dp(14), dp(10)],
+        )
+        inner = BoxLayout(orientation="horizontal", spacing=dp(8))
+
+        text_box = BoxLayout(orientation="vertical", spacing=dp(1))
+        t1 = Label(
+            text=title, color=COLOR_TEXT, font_size="16sp", bold=True,
+            halign="left", valign="middle", size_hint_y=0.55,
+        )
+        t1.bind(size=lambda w, s: setattr(w, "text_size", s))
+        t2 = Label(
+            text=subtitle, color=COLOR_TEXT_SUB, font_size="12sp",
+            halign="left", valign="middle", size_hint_y=0.45,
+        )
+        t2.bind(size=lambda w, s: setattr(w, "text_size", s))
+        text_box.add_widget(t1)
+        text_box.add_widget(t2)
+
+        arrow = Label(
+            text="›", color=COLOR_TEXT_SUB, font_size="22sp", bold=True,
+            size_hint_x=None, width=dp(22),
+            halign="center", valign="middle",
+        )
+        arrow.bind(size=lambda w, s: setattr(w, "text_size", s))
+
+        inner.add_widget(text_box)
+        inner.add_widget(arrow)
+        btn.add_widget(inner)
+        btn.bind(on_release=on_release)
+        return btn
+
+
+# ================= 关于页 =================
+class AboutScreen(Screen):
+    """关于页：正文来自文件顶部的 ABOUT_TEXT 常量（当前留空，由你填写）。"""
+
+    def __init__(self, app_ref, **kwargs):
+        super().__init__(**kwargs)
+        self.app_ref = app_ref
+
+        root = BoxLayout(orientation="vertical")
+        _draw_flat(root, COLOR_BG)
+        self.add_widget(root)
+
+        # 顶部栏
+        bar = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(64),
+            padding=[dp(10), dp(8), dp(14), dp(8)],
+            spacing=dp(10),
+        )
+        _draw_flat(bar, COLOR_TOPBAR)
+
+        back = RoundButton(
+            icon="back",
+            bg=(1, 1, 1, 0.12),
+            bg_down=(1, 1, 1, 0.28),
+            radius=[dp(20)],
+            size_hint=(None, None),
+            size=(dp(40), dp(40)),
+            pos_hint={"center_y": 0.5},
+        )
+        back.bind(on_release=lambda *a: self.app_ref.go_screen(SettingsScreen))
+        bar.add_widget(back)
+
+        t1 = Label(
+            text="关于", color=(1, 1, 1, 1), font_size="18sp", bold=True,
+            halign="left", valign="middle",
+        )
+        t1.bind(size=lambda w, s: setattr(w, "text_size", s))
+        bar.add_widget(t1)
+        root.add_widget(bar)
+
+        # 正文（可滚动，方便以后写长文）
+        scroll = ScrollView(size_hint=(1, 1))
+        body = Label(
+            text=ABOUT_TEXT if ABOUT_TEXT.strip() else "（内容待填写：请在 main.py 顶部的 ABOUT_TEXT 里写）",
+            color=COLOR_TEXT,
+            font_size="14sp",
+            halign="left",
+            valign="top",
+            size_hint_y=None,
+            padding=[dp(18), dp(18)],
+        )
+        body.bind(
+            width=lambda w, val: setattr(w, "text_size", (val, None)),
+            texture_size=lambda w, val: setattr(w, "height", val[1]),
+        )
+        scroll.add_widget(body)
+        root.add_widget(scroll)
 
 
 # ================= App 主类 =================
@@ -930,15 +1184,18 @@ class BatchRenamerApp(App):
         self.sm.current = "home"
 
     def go_screen(self, screen_cls):
-        """切到某个功能页（首次访问时创建）。"""
+        """切到某个页面（首次访问时创建）。"""
         scr = self._screens.get(screen_cls)
         if scr is None:
             scr = screen_cls(app_ref=self)
             scr.name = screen_cls.__name__
             self._screens[screen_cls] = scr
             self.sm.add_widget(scr)
-        scr.selected_folder = self.selected_folder
-        scr._refresh_folder_label()
+        # 只有功能页才有 selected_folder / _refresh_folder_label，
+        # 设置页、关于页没有——这里做能力检测，避免 AttributeError 闪退。
+        if hasattr(scr, "_refresh_folder_label"):
+            scr.selected_folder = self.selected_folder
+            scr._refresh_folder_label()
         self.sm.transition.direction = "left"
         self.sm.current = scr.name
 
@@ -946,9 +1203,10 @@ class BatchRenamerApp(App):
         """文件夹变化后，同步刷新所有页面上的显示。"""
         self.home._refresh_folder_label()
         for scr in self._screens.values():
-            scr.selected_folder = self.selected_folder
-            scr._refresh_folder_label()
-            scr.plan = None
+            if hasattr(scr, "_refresh_folder_label"):
+                scr.selected_folder = self.selected_folder
+                scr._refresh_folder_label()
+                scr.plan = None
 
     # ---------- 文件夹选择 ----------
     def open_file_chooser(self, on_selected=None):
