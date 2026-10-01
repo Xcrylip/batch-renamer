@@ -19,74 +19,6 @@
     本文件只负责「界面 + 交互」。
 """
 
-# ===== 崩溃日志兜底（自动生成，勿删）=====
-import os as _os
-import sys as _sys
-import traceback as _tb
-import datetime as _dt
-
-def _crash_paths():
-    _ps = []
-    _ps.append("/sdcard/batch_renamer_crash.log")
-    _ps.append("/storage/emulated/0/batch_renamer_crash.log")
-    try:
-        _d = _os.environ.get("ANDROID_PRIVATE")
-        if _d:
-            _ps.append(_os.path.join(_d, "crash.log"))
-    except Exception:
-        pass
-    _ps.append("/data/local/tmp/batch_renamer_crash.log")
-    try:
-        _ps.append(_os.path.join(_os.getcwd(), "crash.log"))
-    except Exception:
-        pass
-    return _ps
-
-def _crash_write(_text):
-    for _p in _crash_paths():
-        try:
-            with open(_p, "a", encoding="utf-8") as _f:
-                _f.write(_text)
-            return _p
-        except Exception:
-            continue
-    return None
-
-def _crash_mark(_tag):
-    try:
-        _crash_write("[%s] %s\n" % (_dt.datetime.now(), _tag))
-        _sys.stderr.write("[crashlog] %s\n" % _tag)
-    except Exception:
-        pass
-
-def _crash_hook(_etype, _evalue, _etb):
-    try:
-        _crash_write("\n===== CRASH %s =====\n" % _dt.datetime.now())
-        _crash_write("".join(_tb.format_exception(_etype, _evalue, _etb)) + "\n")
-    except Exception:
-        pass
-    try:
-        _sys.__stderr__.write("CRASH: %r\n" % (_evalue,))
-    except Exception:
-        pass
-
-_sys.excepthook = _crash_hook
-try:
-    import faulthandler as _fh
-    for _p in _crash_paths():
-        try:
-            _fh_file = open(_p, "a", encoding="utf-8")
-            _fh.enable(_fh_file)
-            break
-        except Exception:
-            continue
-except Exception:
-    pass
-
-_crash_write("\n\n========== APP START %s ==========\n" % _dt.datetime.now())
-_crash_mark("bootstrap ok, will import kivy")
-# ===== 兜底结束 =====
-
 import os
 import sys
 
@@ -111,7 +43,6 @@ from kivy.graphics import Color, Line, Rectangle, RoundedRectangle
 # 让脚本能 import 到同目录下的 batch_renamer 包
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-_crash_mark("kivy imports ok")
 from batch_renamer.core import generate_plan, undo_rename
 from batch_renamer.operations import (
     AddPrefix,
@@ -1443,5 +1374,4 @@ class BatchRenamerApp(App):
 
 
 if __name__ == "__main__":
-    _crash_mark("main entry, calling run()")
     BatchRenamerApp().run()
