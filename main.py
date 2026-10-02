@@ -140,6 +140,7 @@ from kivy.core.text import LabelBase
 from kivy.metrics import dp
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
+from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.label import Label
 from kivy.uix.popup import Popup
 from kivy.uix.relativelayout import RelativeLayout
@@ -1099,8 +1100,15 @@ class HomeScreen(Screen):
             padding=[dp(18), dp(10), dp(18), dp(10)],
         )
 
-        # 按钮内容：左（标题+说明） / 右（箭头）
-        inner = BoxLayout(orientation="horizontal", spacing=dp(8))
+        # 按钮内容：左（标题+说明） / 右（箭头）。
+        # padding 复用按钮自身的内边距；size_hint 由外层 FloatLayout 解析
+        # （见下方 card），不要指望 Button 自己排版子控件。
+        inner = BoxLayout(
+            orientation="horizontal",
+            spacing=dp(8),
+            padding=btn.padding,
+            size_hint=(1, 1),
+        )
         text_box = BoxLayout(orientation="vertical", spacing=dp(1))
         t1 = Label(
             text=title,
@@ -1138,10 +1146,21 @@ class HomeScreen(Screen):
 
         inner.add_widget(text_box)
         inner.add_widget(arrow)
-        btn.add_widget(inner)              # ★ 真正挂载进渲染树，文字才会显示
+
+        # ★ 真机「按钮没有字」的根因就在这一层：
+        # Kivy 的 size_hint 是父容器在 do_layout 里解析的，而 Button 的继承链
+        # 是 Button → ButtonBehavior → Label → Widget，里面没有任何 Layout。
+        # 所以直接 btn.add_widget(inner) 之后，inner 会永远停在 Kivy 默认的
+        # 100x100、pos=(0,0)，两行文字被压在按钮左下角一个小方块里（还往上
+        # 溢出），视觉上就是「整条按钮都没字」。
+        # 解法：套一层 FloatLayout（它是真正的 Layout，会解析 size_hint），
+        # 让 btn（圆角背景，负责点击）和 inner（文字层）铺满同一块区域。
+        card = FloatLayout(size_hint_y=None, height=dp(78))
+        card.add_widget(btn)      # 底层：背景
+        card.add_widget(inner)    # 上层：标题 / 副标题 / 箭头
 
         btn.bind(on_release=lambda *a: self.app_ref.go_screen(screen_cls))
-        return btn
+        return card
 
     def _refresh_folder_label(self):
         if self.app_ref.selected_folder:
@@ -1222,7 +1241,13 @@ class SettingsScreen(Screen):
             height=dp(66),
             padding=[dp(18), dp(10), dp(14), dp(10)],
         )
-        inner = BoxLayout(orientation="horizontal", spacing=dp(8))
+        # 同 _entry_button：Button 自身不会排版子控件，交给外层 FloatLayout。
+        inner = BoxLayout(
+            orientation="horizontal",
+            spacing=dp(8),
+            padding=btn.padding,
+            size_hint=(1, 1),
+        )
 
         text_box = BoxLayout(orientation="vertical", spacing=dp(1))
         t1 = Label(
@@ -1247,9 +1272,14 @@ class SettingsScreen(Screen):
 
         inner.add_widget(text_box)
         inner.add_widget(arrow)
-        btn.add_widget(inner)
+
+        # 同 _entry_button：外层 FloatLayout 才负责排版（背景 + 文字两层）。
+        card = FloatLayout(size_hint_y=None, height=dp(66))
+        card.add_widget(btn)
+        card.add_widget(inner)
+
         btn.bind(on_release=on_release)
-        return btn
+        return card
 
 
 # ================= 关于页 =================
