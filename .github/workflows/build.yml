@@ -211,6 +211,114 @@ jobs:
           fi
           keytool -list -keystore "$HOME/.android/debug.keystore" -storepass android | grep -E 'androiddebugkey|SHA1'
 
+      - name: Cache Gradle user home (wrapper + dependency cache)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/wrapper
+            ~/.gradle/caches
+          # 单独一套 key 空间：Gradle 用户目录与 ~/.buildozer 无关，
+          # 混在一起会让任一侧的改动同时废掉两侧缓存。
+          # restore-keys 用前缀，保证第一次跑也能吃到最近的旧缓存。
+          key: gradle-v1-${{ hashFiles('buildozer.spec') }}
+          restore-keys: |
+            gradle-v1-
+
+      - name: Patch cached Gradle project to add mavenCentral
+        run: |
+          # 【Gradle 依赖解析修复 · 第 1 层：直接改文件】
+          # 结论来自两处硬证据：
+          # 1) CI 日志（run 36980252657，步骤 12 Build APK）：
+          #      A problem occurred configuring root project 'batchrenamer'.
+          #      > Could not resolve all files for configuration ':classpath'.
+          #      > Could not find org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.20-RC2
+          #        Searched in the following locations:
+          #          - https://dl.google.com/dl/android/maven2/...
+          #          - https://jcenter.bintray.com/...
+          #    另外 asm:9.2 / protobuf-java:3.19.3 / grpc-*:1.45.1 /
+          #    jaxb-runtime:2.3.2 / httpmime:4.5.6 / commons-io:2.4 /
+          #    javapoet:1.10.0 / gson:2.8.9 / com.squareup:javawriter:2.5.0 /
+          #    com.google.code.findbugs:jsr305:3.0.2 等几十个 AGP 8.1.1 的
+          #    传递依赖全部 "Could not find"。
+          #    Gradle 只搜了 google 和 jcenter 两个仓库 —— 说明仓库列表里
+          #    根本没有 mavenCentral()。
+          # 2) 上游模板源码（kivy/python-for-android @ v2024.01.21，
+          #    pythonforandroid/bootstraps/common/build/templates/build.tmpl.gradle）：
+          #      buildscript {
+          #          repositories { google(); jcenter() }   # ← 没有 mavenCentral
+          #          dependencies { classpath 'com.android.tools.build:gradle:8.1.1' }
+          #      }
+          #    jcenter.bintray.com 早已停服，这些构件现在只存在于 Maven Central，
+          #    所以该模板如今已无法解析 AGP 的依赖。
+          #
+          # 为什么不能只改模板：整个 dists/ 目录（含已经生成好的 build.gradle）
+          # 是从 ~/.buildozer 缓存里恢复出来的，p4a 判定 "has compatible
+          # recipes, using this one" 之后不会重新渲染模板，改模板对已存在的
+          # 文件无效。所以这里直接改 Gradle 真正读的那个文件：
+          # dists/<name>/build.gradle，只在第一个 repositories { 块（即
+          # buildscript 的仓库块）里补一行 mavenCentral()。
+          set -euo pipefail
+          FOUND=0
+          for f in "$HOME"/.buildozer/android/platform/build-*/dists/*/build.gradle; do
+            [ -f "$f" ] || continue
+            FOUND=$((FOUND + 1))
+            if grep -q 'mavenCentral' "$f"; then
+              echo "== 已含 mavenCentral，跳过: $f =="
+              continue
+            fi
+            cp -f "$f" "$f.bak-repos"
+            sed -i '0,/repositories {/s/repositories {/repositories {\n mavenCentral()/' "$f"
+            echo "== 已注入 mavenCentral: $f =="
+            sed -n '1,12p' "$f"
+          done
+          echo "扫描到的 build.gradle 数量: $FOUND"
+          # 这里故意不 fail：缓存未命中时 dists/ 还没生成，文件不存在属正常，
+          # 由下一步的 Gradle init script（覆盖每一次 gradle 调用）兜底。
+
+      - name: Install Gradle init script to force mavenCentral
+        run: |
+          # 【Gradle 依赖解析修复 · 第 2 层：运行时强制注入】
+          # 与第 1 层互补：第 1 层改的是"缓存里已存在的 build.gradle"，
+          # 若缓存未命中导致 dist 被重新生成（模板又是不带 mavenCentral 的
+          # 版本），或 p4a 在构建过程中重写了 build.gradle，第 1 层就白改了。
+          # 这一层用 Gradle 官方机制：$GRADLE_USER_HOME/init.d/*.gradle 会被
+          # 该用户下的每一次 gradle 调用自动应用（run 日志里 Gradle 用户目录
+          # 就是 /home/runner/.gradle）。它在不改 dist、不改 p4a 源码的前提下，
+          # 给所有工程——包括根工程 buildscript 的 :classpath 解析——补上
+          # mavenCentral()。
+          set -euo pipefail
+          INIT_DIR="$HOME/.gradle/init.d"
+          INIT="$INIT_DIR/zz-force-maven-central.gradle"
+          mkdir -p "$INIT_DIR"
+
+          cat > "$INIT" <<'GRADLE'
+          // 自动注入 Maven Central。
+          // 背景：p4a v2024.01.21 生成的 build.gradle 只在 buildscript.repositories
+          // 里写了 google() + jcenter()，而 jcenter 已停服、AGP 8.1.1 的传递依赖
+          // 只在 Maven Central 上，导致 Gradle 配置阶段直接
+          //   "Could not resolve all files for configuration ':classpath'"。
+          // 这里在工程创建时（早于其 build.gradle 求值、也早于依赖解析）给
+          // buildscript 仓库与工程仓库都补上 mavenCentral()。用 findByName 保护，
+          // 避免与 build.gradle 里已有的同名仓库冲突。
+          allprojects { project ->
+              try {
+                  def addIfMissing = { handler ->
+            if (handler.findByName('MavenRepo') == null) {
+                handler.mavenCentral()
+            }
+                  }
+                  addIfMissing(project.buildscript.repositories)
+                  addIfMissing(project.repositories)
+              } catch (Throwable t) {
+                  println "WARN: 注入 mavenCentral 失败（不影响其它逻辑）: ${t.message}"
+              }
+          }
+          GRADLE
+
+          echo "===== 已写入 $INIT ====="
+          cat "$INIT"
+          echo "========================"
+
       - name: Build APK
         run: |
           unset ANDROID_NDK ANDROID_NDK_HOME ANDROID_NDK_ROOT ANDROID_HOME ANDROID_SDK_ROOT
