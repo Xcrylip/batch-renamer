@@ -697,14 +697,27 @@ class FeatureScreen(Screen):
         self.plan = None
 
     def _refresh_folder_label(self):
-        if self.selected_folder:
-            try:
-                n = len(os.listdir(self.selected_folder))
-            except Exception:
-                n = 0
-            self.folder_label.text = f"文件夹：{self.selected_folder}（约 {n} 项）"
-        else:
+        if not self.selected_folder:
             self.folder_label.text = "未选择文件夹"
+            return
+        try:
+            n = len(os.listdir(self.selected_folder))
+        except PermissionError:
+            # ★ 真机「没有文件可以处理」的根因就在这里：
+            # targetSdk 34 下，访问 /storage/emulated/0 里的任意目录必须先拿到
+            # 「所有文件访问」(MANAGE_EXTERNAL_STORAGE)，否则 os.listdir 直接抛
+            # PermissionError；而 READ/WRITE_EXTERNAL_STORAGE 在 Android 13+
+            # 已经不再覆盖这个场景（真机上它们的 granted 也是 false）。
+            # 以前这里被 except Exception 一并吞掉、统一显示「约 0 项」，
+            # 看起来就像「这个文件夹里没有文件」，完全误导。
+            self.folder_label.text = (
+                f"文件夹：{self.selected_folder}（⚠ 缺少「所有文件访问」权限）"
+            )
+            self.app_ref.ensure_all_files_access(prompt=True)
+            return
+        except Exception:
+            n = 0
+        self.folder_label.text = f"文件夹：{self.selected_folder}（约 {n} 项）"
 
     def get_files_in_folder(self):
         """读取文件夹中的文件名列表（跳过隐藏文件和日志文件）。
@@ -717,6 +730,10 @@ class FeatureScreen(Screen):
         names_out = []
         try:
             names = sorted(os.listdir(self.selected_folder))
+        except PermissionError:
+            # 权限不够：不要报「读取失败」，而是直接把用户送到授权页。
+            self.app_ref.ensure_all_files_access(prompt=True, force=True)
+            return []
         except Exception as e:
             self.show_message(f"读取文件夹失败: {e}")
             return []
@@ -1375,6 +1392,8 @@ class BatchRenamerApp(App):
         super().__init__(**kwargs)
         self.selected_folder = None
         self._screens = {}  # 类 -> 实例，避免重复创建
+        self._asked_all_files = False   # 是否已经引导过「所有文件访问」
+        self._resume_bound = False      # 是否已绑定 on_resume 回调
 
     # ---------- 生命周期 ----------
     def build(self):
@@ -1393,7 +1412,9 @@ class BatchRenamerApp(App):
         return self.sm
 
     def on_start(self):
-        self._check_manage_storage()
+        # 启动就检查「所有文件访问」：没有它，扫描永远只能得到「0 项」。
+        # 弹窗放在 0.6s 后，避免和窗口/ScreenManager 初始化抢时机。
+        Clock.schedule_once(lambda dt: self.ensure_all_files_access(prompt=True), 0.6)
 
     # ---------- 导航 ----------
     def go_home(self):
@@ -1537,18 +1558,114 @@ class BatchRenamerApp(App):
         except Exception as e:
             print(f"[权限] 申请失败: {e}")
 
-    def _check_manage_storage(self):
-        """Android 11+ 需要 MANAGE_EXTERNAL_STORAGE 才能访问任意目录。
+    # ---------- 权限：「所有文件访问」 ----------
+    def has_all_files_access(self):
+        """是否已拿到「所有文件访问」(MANAGE_EXTERNAL_STORAGE)。
 
-        这里只做提示，不强行跳转设置（跳转会让首次启动体验变差）。
+        非 Android 环境（桌面调试）一律返回 True，不做任何拦截。
         """
         try:
             from jnius import autoclass
             Environment = autoclass("android.os.Environment")
-            if not Environment.isExternalStorageManager():
-                print("[权限] 提示：如需访问所有文件，请在系统设置里授予「所有文件访问」权限")
+            return bool(Environment.isExternalStorageManager())
+        except Exception:
+            return True
+
+    def open_all_files_settings(self):
+        """跳转到本应用的「所有文件访问」授权页。"""
+        try:
+            from jnius import autoclass
+            from android import mActivity
+
+            Intent = autoclass("android.content.Intent")
+            Settings = autoclass("android.provider.Settings")
+            Uri = autoclass("android.net.Uri")
+
+            pkg = mActivity.getPackageName()
+            intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
+            intent.setData(Uri.parse("package:" + str(pkg)))
+            mActivity.startActivity(intent)
+            return True
+        except Exception as e:
+            print(f"[权限] 打开应用授权页失败: {e}")
+
+        # 有些 ROM 不支持「带包名」那个 action，退回总列表页。
+        try:
+            from jnius import autoclass
+            from android import mActivity
+
+            Intent = autoclass("android.content.Intent")
+            Settings = autoclass("android.provider.Settings")
+            mActivity.startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+            return True
+        except Exception as e:
+            print(f"[权限] 打开授权列表页失败: {e}")
+            return False
+
+    def _bind_resume_check(self):
+        """绑定 on_resume：从系统设置页回到 App 时重新检查权限。"""
+        if self._resume_bound:
+            return
+        try:
+            from android import activity
+            activity.bind(on_resume=self._on_app_resume)
+            self._resume_bound = True
         except Exception:
             pass
+
+    def _on_app_resume(self, *args):
+        """用户从设置页返回后，权限可能刚被打开，立即重查并刷新界面。"""
+        try:
+            if self.has_all_files_access():
+                self._asked_all_files = False
+            self.refresh_folder_labels()
+        except Exception:
+            pass
+
+    def ensure_all_files_access(self, prompt=True, force=False):
+        """检测「所有文件访问」；缺失时弹窗引导用户去开启。
+
+        prompt=False -> 只检测不弹窗；
+        force=True  -> 即使用户之前忽略过，也再次弹窗。
+        """
+        if self.has_all_files_access():
+            return True
+        if not prompt:
+            return False
+        if self._asked_all_files and not force:
+            return False
+        self._asked_all_files = True
+        self._bind_resume_check()
+
+        box = BoxLayout(orientation="vertical", padding=dp(12), spacing=dp(10))
+        tip = Label(
+            text=(
+                "读取文件夹需要「所有文件访问」权限。\n\n"
+                "没有它时，系统会直接拒绝访问，界面只能显示\n"
+                "「约 0 项 / 没有可处理的文件」。\n\n"
+                "点下方按钮去开启，然后回到本应用即可。"
+            ),
+            font_size="14sp", halign="left", valign="middle",
+        )
+        tip.bind(size=lambda w, s: setattr(w, "text_size", s))
+        box.add_widget(tip)
+
+        popup = Popup(title="需要「所有文件访问」权限", content=box,
+                      size_hint=(0.9, 0.55))
+
+        def _go_settings(*a):
+            popup.dismiss()
+            self.open_all_files_settings()
+
+        go_btn = RoundButton(text="去开启", size_hint_y=None, height=dp(46))
+        go_btn.bind(on_release=_go_settings)
+        box.add_widget(go_btn)
+
+        later = RoundButton(text="稍后", size_hint_y=None, height=dp(40))
+        later.bind(on_release=lambda *a: popup.dismiss())
+        box.add_widget(later)
+        popup.open()
+        return False
 
     # ---------- 通用弹窗 ----------
     def show_message(self, message):

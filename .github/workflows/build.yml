@@ -192,6 +192,25 @@ jobs:
           echo "!! p4a clone failed after $MAX_ATTEMPTS attempts"
           exit 1
 
+      - name: Restore fixed debug keystore
+        run: |
+          # 【固定签名·第 1 层】
+          # 背景：CI 每次都跑在全新的 runner 上，~/.android/debug.keystore 不存在时，
+          # python-for-android 会现场随机生成一个 debug key。于是每个版本 APK 的签名
+          # 都不一样，真机覆盖安装必报 INSTALL_FAILED_UPDATE_INCOMPATIBLE (-7)，
+          # 只能先卸载旧版（会清空 App 内部数据）。
+          # 对策：把仓库里固定的 debug keystore 放到 p4a 期望的位置。
+          set -euo pipefail
+          mkdir -p "$HOME/.android"
+          if [ -f signing/debug.keystore ]; then
+            cp -f signing/debug.keystore "$HOME/.android/debug.keystore"
+            echo "== 已启用仓库内固定 keystore =="
+          else
+            echo "::error::缺少 signing/debug.keystore —— 构建出的 APK 签名会随机，无法覆盖安装"
+            exit 1
+          fi
+          keytool -list -keystore "$HOME/.android/debug.keystore" -storepass android | grep -E 'androiddebugkey|SHA1'
+
       - name: Build APK
         run: |
           unset ANDROID_NDK ANDROID_NDK_HOME ANDROID_NDK_ROOT ANDROID_HOME ANDROID_SDK_ROOT
@@ -220,6 +239,47 @@ jobs:
           # 双保险：即使子进程重新推导 pkg-config，也不会读到宿主配置
           PKG_CONFIG_LIBDIR: ""
           PKG_CONFIG_PATH: ""
+
+      - name: Re-sign APK with fixed keystore
+        run: |
+          # 【固定签名·第 2 层】
+          # 无论 p4a 最终用了哪个 key 签名，这里都剥掉旧签名、用固定 key 重签一遍。
+          # 只要 signing/debug.keystore 不变，每版 APK 的签名指纹就绝对一致，
+          # 真机可以直接覆盖安装，不用再卸载。
+          set -euo pipefail
+          APK=$(ls -1 bin/*.apk | head -1)
+          echo "目标 APK: $APK"
+
+          APKSIGNER=$(find "$HOME/.buildozer" -name apksigner -type f 2>/dev/null | sort -V | tail -1)
+          ZIPALIGN=$(find "$HOME/.buildozer" -name zipalign -type f 2>/dev/null | sort -V | tail -1)
+          echo "apksigner: $APKSIGNER"
+          echo "zipalign: $ZIPALIGN"
+          if [ -z "$APKSIGNER" ] || [ -z "$ZIPALIGN" ]; then
+            echo "::error::未找到 apksigner / zipalign，无法重签名"
+            exit 1
+          fi
+
+          # 1) 剔掉 p4a 产生的签名文件（其余 META-INF 内容保留）
+          python - "$APK" /tmp/app-stripped.apk <<'PY'
+          import sys, zipfile
+          src, dst = sys.argv[1], sys.argv[2]
+          drop = ("META-INF/MANIFEST.MF",)
+          with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zout:
+              for item in zin.infolist():
+                  n = item.filename
+                  if n in drop or (n.startswith("META-INF/") and n.upper().endswith((".RSA", ".DSA", ".EC", ".SF"))):
+                      continue
+                  zout.writestr(item, zin.read(n))
+          PY
+
+          # 2) 四字节对齐（必须在签名之前）
+          "$ZIPALIGN" -p -f 4 /tmp/app-stripped.apk /tmp/app-aligned.apk
+
+          # 3) 用固定 keystore 重签
+          "$APKSIGNER" sign             --ks signing/debug.keystore             --ks-pass pass:android             --key-pass pass:android             --ks-key-alias androiddebugkey             --min-sdk-version 21             --out "$APK" /tmp/app-aligned.apk
+
+          # 4) 打印指纹（和真机安装后的对比，确认固定生效）
+          "$APKSIGNER" verify --print-certs "$APK" | grep -E 'Signer #1 certificate SHA-256 digest|Signer #1 certificate DN'
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
