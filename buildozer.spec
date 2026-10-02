@@ -30,7 +30,7 @@ source.exclude_dirs = tests, bin
 
 # 版本号（显示给用户的版本名，例如「0.1」）
 # 0.1.1: 修复横屏问题（buildozer.spec 补 orientation=portrait）
-version = 0.1.2
+version = 0.1.3
 
 # Android 内部版本号（必须是整数，且每次发新版必须增大）。
 # 显式指定，避免依赖 buildozer 自动推导：
@@ -38,7 +38,7 @@ version = 0.1.2
 #   而当版本号不递增时，Android 会拒绝安装（提示「应用未安装 / 版本降级」）。
 # 规则：主版本*10000 + 次版本*100 + 修订号，例如 0.1.0 -> 100。
 # 100 -> 101: 横屏修复版，保证能覆盖安装旧包，无需卸载。
-android.numeric_version = 102
+android.numeric_version = 103
 
 # 依赖的 Python 模块（会自动通过 pip 安装）
 # 不钉死版本：让 python-for-android 自动匹配 hostpython3，避免出现

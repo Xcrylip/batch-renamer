@@ -26,31 +26,45 @@ import traceback as _tb
 import datetime as _dt
 
 def _crash_paths():
+    # 顺序很重要：真机实测 /data/data/<pkg>/files 一定可写，
+    # 且能用 `run-as <pkg> cat files/crash.log` 直接读出来；
+    # 而 /sdcard/Android/data/... （scoped storage）shell 和容器都读不到，
+    # 之前正是因此一直「找不到 crash.log」。
     _ps = []
-    _ps.append("/sdcard/batch_renamer_crash.log")
-    _ps.append("/storage/emulated/0/batch_renamer_crash.log")
     try:
         _d = _os.environ.get("ANDROID_PRIVATE")
         if _d:
             _ps.append(_os.path.join(_d, "crash.log"))
     except Exception:
         pass
-    _ps.append("/data/local/tmp/batch_renamer_crash.log")
     try:
         _ps.append(_os.path.join(_os.getcwd(), "crash.log"))
     except Exception:
         pass
+    _ps.append("/storage/emulated/0/Android/data/com.xcrylip.batchrenamer/files/crash.log")
+    _ps.append("/sdcard/Android/data/com.xcrylip.batchrenamer/files/crash.log")
+    _ps.append("/sdcard/batch_renamer_crash.log")
+    _ps.append("/storage/emulated/0/batch_renamer_crash.log")
+    _ps.append("/data/local/tmp/batch_renamer_crash.log")
     return _ps
 
 def _crash_write(_text):
+    _ok = None
     for _p in _crash_paths():
         try:
+            _d = _os.path.dirname(_p)
+            if _d and not _os.path.isdir(_d):
+                try:
+                    _os.makedirs(_d)
+                except Exception:
+                    pass
             with open(_p, "a", encoding="utf-8") as _f:
                 _f.write(_text)
-            return _p
+            if _ok is None:
+                _ok = _p
         except Exception:
             continue
-    return None
+    return _ok
 
 def _crash_mark(_tag):
     try:
@@ -60,16 +74,18 @@ def _crash_mark(_tag):
         pass
 
 def _crash_hook(_etype, _evalue, _etb):
+    _txt = "".join(_tb.format_exception(_etype, _evalue, _etb))
     try:
         _crash_write("\n===== CRASH %s =====\n" % _dt.datetime.now())
-        _crash_write("".join(_tb.format_exception(_etype, _evalue, _etb)) + "\n")
+        _crash_write(_txt + "\n")
     except Exception:
         pass
     try:
-        _sys.__stderr__.write("CRASH: %r\n" % (_evalue,))
+        # 同时把完整 traceback 吐到 stderr：
+        # 这样即使所有落盘路径都失败，也能在 logcat 里直接看到死因。
+        _sys.__stderr__.write("CRASH: %r\n%s\n" % (_evalue, _txt))
     except Exception:
         pass
-
 _sys.excepthook = _crash_hook
 try:
     import faulthandler as _fh
@@ -82,6 +98,34 @@ try:
             continue
 except Exception:
     pass
+
+
+def _crash_install_kivy_handler():
+    """把 Kivy 主循环里未处理的异常也写进 crash.log。
+
+    注意：``handle_exception`` 返回 ``None`` 是**故意的**——
+    Kivy 的 ``ExceptionManager.handle_exception`` 只在返回值等于
+    ``PASS`` 时才改变策略，返回 ``None`` 等于「什么策略都不动」，
+    所以这里只做记录，绝不改变 Kivy 原来的处置行为。
+    必须等 ``kivy.base`` 导入之后再调用。
+    """
+    try:
+        from kivy.base import ExceptionHandler, ExceptionManager
+
+        class _KivyCrashLogger(ExceptionHandler):
+            def handle_exception(self, inst):
+                try:
+                    _crash_hook(type(inst), inst, inst.__traceback__)
+                except Exception:
+                    pass
+                return None  # 保持 Kivy 默认策略不变
+
+        ExceptionManager.add_handler(_KivyCrashLogger())
+        _crash_mark("kivy exception handler installed")
+    except Exception:
+        pass
+
+
 
 _crash_write("\n\n========== APP START %s ==========\n" % _dt.datetime.now())
 _crash_mark("bootstrap ok, will import kivy")
@@ -119,6 +163,7 @@ from batch_renamer.operations import (
     ReplaceText,
     InsertIndex,
 )
+from batch_renamer.ui_utils import normalize_radius as _normalize_radius
 
 LOG_NAME = ".batch_rename_log.json"
 
@@ -193,12 +238,31 @@ RADIUS = dp(10)
 
 
 # ================= 绘图小工具 =================
+def _norm_radius(radius):
+    """把半径规整成 Kivy 一定接受的形式（防止嵌套 list 触发 GraphicException）。
+
+    真机「打开即闪退」的根因就在这里：
+      * 调用点写成 radius=[dp(18)]（单元素 list）；
+      * RoundButton 旧代码又用 [radius] 包了一层 -> [[18.0]]；
+      * Kivy 的 RoundedRectangle._check_radius 遇到 list 元素直接抛
+        GraphicException: Invalid radius value, must be list of tuples/numerics；
+      * 该异常发生在 App.build() 期间，CPython 走 Py_Exit 直接结束进程。
+
+    真正的规整逻辑放在 batch_renamer/ui_utils.py（纯 Python，可被 pytest 覆盖）。
+    """
+    if radius is None:
+        radius = RADIUS
+    elif isinstance(radius, bool):
+        radius = RADIUS
+    return _normalize_radius(radius, default=RADIUS)
+
+
 def _draw_round(widget, rgba, radius=RADIUS):
     """给控件画一个圆角矩形背景。"""
     with widget.canvas.before:
         Color(*rgba)
         widget._rr = RoundedRectangle(
-            pos=widget.pos, size=widget.size, radius=[radius]
+            pos=widget.pos, size=widget.size, radius=_norm_radius(radius)
         )
 
     def _upd(w, *a):
@@ -271,7 +335,12 @@ class RoundButton(Button):
         kwargs.setdefault("size_hint_y", None)
         kwargs.setdefault("height", dp(44))
         super().__init__(**kwargs)
-        self._radius = [radius if radius is not None else RADIUS]
+        # 半径统一走 _norm_radius：
+        #   旧代码是 [radius if radius is not None else RADIUS]，
+        #   当调用方传 radius=[dp(18)]（单元素 list）时会得到 [[18.0]]，
+        #   Kivy 的 RoundedRectangle 见到 list 元素就抛 GraphicException，
+        #   直接导致真机「打开即闪退」。
+        self._radius = _norm_radius(radius)
 
         with self.canvas.before:
             self._c = Color(*bg)
@@ -474,7 +543,7 @@ class FeatureScreen(Screen):
             icon="back",
             bg=(1, 1, 1, 0.12),
             bg_down=(1, 1, 1, 0.28),
-            radius=[dp(20)],
+            radius=dp(20),
             size_hint=(None, None),
             size=(dp(40), dp(40)),
             pos_hint={"center_y": 0.5},
@@ -964,7 +1033,7 @@ class HomeScreen(Screen):
             text="⚙",
             bg=(1, 1, 1, 0.12),
             bg_down=(1, 1, 1, 0.28),
-            radius=[dp(18)],
+            radius=dp(18),
             size_hint=(None, None),
             size=(dp(38), dp(38)),
             font_size="19sp",
@@ -1110,7 +1179,7 @@ class SettingsScreen(Screen):
             icon="back",
             bg=(1, 1, 1, 0.12),
             bg_down=(1, 1, 1, 0.28),
-            radius=[dp(20)],
+            radius=dp(20),
             size_hint=(None, None),
             size=(dp(40), dp(40)),
             pos_hint={"center_y": 0.5},
@@ -1209,7 +1278,7 @@ class AboutScreen(Screen):
             icon="back",
             bg=(1, 1, 1, 0.12),
             bg_down=(1, 1, 1, 0.28),
-            radius=[dp(20)],
+            radius=dp(20),
             size_hint=(None, None),
             size=(dp(40), dp(40)),
             pos_hint={"center_y": 0.5},
@@ -1263,6 +1332,9 @@ class BatchRenamerApp(App):
 
     # ---------- 生命周期 ----------
     def build(self):
+        # 把 Kivy 主循环/构建期的未处理异常也落盘，
+        # 避免以后任何异常只表现为「打开即闪退」却查不到原因。
+        _crash_install_kivy_handler()
         register_chinese_font()
 
         # 延迟一点点申请权限，避免和窗口初始化抢资源
