@@ -1156,6 +1156,14 @@ class HomeScreen(Screen):
         # 解法：套一层 FloatLayout（它是真正的 Layout，会解析 size_hint），
         # 让 btn（圆角背景，负责点击）和 inner（文字层）铺满同一块区域。
         card = FloatLayout(size_hint_y=None, height=dp(78))
+        # ★ FloatLayout 只给「带 pos_hint」的子控件定位（见其文档：“If you are not using
+        #   pos_hint, you must handle the positioning of the children by yourself.”）。
+        #   btn / inner 若没有 pos_hint，就会一直停在 pos=(0,0)；而 Kivy 的 pos 是
+        #   窗口绝对坐标，于是三张卡的背景与文字全部叠到「屏幕左下角」，
+        #   最后添加的「插入序号」（橙色）压在最上层，看起来就像另外两个入口被删了。
+        #   这里显式让这两层贴满整张卡片（size_hint 已是 (1, 1)）。
+        for _layer in (btn, inner):
+            _layer.pos_hint = {"x": 0, "y": 0}
         card.add_widget(btn)      # 底层：背景
         card.add_widget(inner)    # 上层：标题 / 副标题 / 箭头
 
@@ -1275,6 +1283,14 @@ class SettingsScreen(Screen):
 
         # 同 _entry_button：外层 FloatLayout 才负责排版（背景 + 文字两层）。
         card = FloatLayout(size_hint_y=None, height=dp(66))
+        # ★ FloatLayout 只给「带 pos_hint」的子控件定位（见其文档：“If you are not using
+        #   pos_hint, you must handle the positioning of the children by yourself.”）。
+        #   btn / inner 若没有 pos_hint，就会一直停在 pos=(0,0)；而 Kivy 的 pos 是
+        #   窗口绝对坐标，于是三张卡的背景与文字全部叠到「屏幕左下角」，
+        #   最后添加的「插入序号」（橙色）压在最上层，看起来就像另外两个入口被删了。
+        #   这里显式让这两层贴满整张卡片（size_hint 已是 (1, 1)）。
+        for _layer in (btn, inner):
+            _layer.pos_hint = {"x": 0, "y": 0}
         card.add_widget(btn)
         card.add_widget(inner)
 
