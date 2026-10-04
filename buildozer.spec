@@ -21,7 +21,13 @@ source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,ttf,ttc,otf
 
 # 排除的文件或目录
-source.exclude_dirs = tests, bin
+# tools/ 是开发期脚本（真机尺寸渲染、页面高度体检、无头冒烟测试），
+#        应用运行时不 import 它，但 py 在 source.include_exts 白名单内，
+#        不排除就会被打进 APK 的 assets/private.tar，白白占体积。
+# 注意：LICENSE 不归这套白名单管——buildozer 只过滤「有扩展名」的文件，
+#        无扩展名的文件一律放行，所以根目录 LICENSE 会随包分发；
+#        这是有意保留的（开源分发时随包附许可证并不算错，且仅约 1KB）。
+source.exclude_dirs = tests, bin, tools
 
 # 主入口文件（Kivy 应用的主文件）
 # 说明：buildozer 会自动使用 source.dir 下的 main.py，无需额外声明；
