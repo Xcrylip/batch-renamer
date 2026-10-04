@@ -2,14 +2,15 @@
 批量重命名工具 — Kivy 图形界面（分页式，每页只做一件事）
 
 结构说明：
-    首页只有 3 个入口按钮，每个入口进入一个「只负责单一功能」的页面：
+    首页是功能入口列表，每个入口进入一个「只负责单一功能」的页面：
 
         首页
          ├── 加前/后缀  -> 只做「前缀 + 后缀」两件事
          ├── 查找替换    -> 只做「查找替换」一件事
-         └── 插入序号    -> 只做「插入序号」一件事
+         ├── 插入序号    -> 只做「插入序号」一件事
+         └── 分段重命名  -> 把文件名拆成「文字 + 数字」两段分别重排
 
-    三个功能页彼此完全独立（互斥）：
+    各功能页彼此完全独立（互斥）：
       * 每页只读取本页自己的输入控件来生成操作；
       * 每页各自维护独立的 self.plan，不会出现「A 页预览、B 页执行」的串台；
       * 公共操作区（选择文件夹 / 预览 / 执行 / 撤回）在每页都有一份，
@@ -140,6 +141,7 @@ from kivy.core.text import LabelBase
 from kivy.metrics import dp
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
+from kivy.uix.checkbox import CheckBox
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.label import Label
 from kivy.uix.popup import Popup
@@ -163,6 +165,7 @@ from batch_renamer.operations import (
     AddSuffix,
     ReplaceText,
     InsertIndex,
+    SegmentRename,
 )
 from batch_renamer.ui_utils import normalize_radius as _normalize_radius
 
@@ -495,6 +498,10 @@ class FeatureScreen(Screen):
         self.app_ref = app_ref
         self.plan = None  # 本页独立的执行计划
         self.selected_folder = app_ref.selected_folder
+        # 「勾选文件」：None 表示「全部参与」，否则是一个文件名集合
+        self.selected_names = None
+        # 排序依据：0=文件名称顺序（默认，与旧行为一致）1=文件夹列表原顺序 2=时间顺序（旧→新）
+        self.sort_mode = 0
 
         root = BoxLayout(orientation="vertical")
         _draw_flat(root, COLOR_BG)
@@ -591,6 +598,25 @@ class FeatureScreen(Screen):
         )
         self.folder_label.bind(size=lambda w, s: setattr(w, "text_size", s))
         card.add_widget(self.folder_label)
+
+        # ---------- 勾选文件 ----------
+        # 只在「选中的那几项」上做修改：不勾选的文件完全不参与。
+        self.btn_pick = RoundButton(text="勾选文件", bg=COLOR_PRIMARY,
+                                    bg_down=COLOR_PRIMARY_D)
+        self.btn_pick.bind(on_release=self.open_pick_files)
+        card.add_widget(self.btn_pick)
+
+        self.sel_label = Label(
+            text="参与修改：全部文件",
+            color=COLOR_TEXT_SUB,
+            font_size="13sp",
+            size_hint_y=None,
+            height=dp(22),
+            halign="left",
+            valign="middle",
+        )
+        self.sel_label.bind(size=lambda w, s: setattr(w, "text_size", s))
+        card.add_widget(self.sel_label)
 
         row1 = BoxLayout(orientation="horizontal", size_hint_y=None,
                          height=dp(44), spacing=dp(10))
@@ -695,6 +721,9 @@ class FeatureScreen(Screen):
         self.app_ref.selected_folder = folder
         self.app_ref.refresh_folder_labels()
         self.plan = None
+        # 换了文件夹，旧的勾选集合已经没有意义，回到「全部参与」
+        self.selected_names = None
+        self._refresh_sel_label()
 
     def _refresh_folder_label(self):
         if not self.selected_folder:
@@ -719,8 +748,9 @@ class FeatureScreen(Screen):
             n = 0
         self.folder_label.text = f"文件夹：{self.selected_folder}（约 {n} 项）"
 
-    def get_files_in_folder(self):
-        """读取文件夹中的文件名列表（跳过隐藏文件和日志文件）。
+    # ---------- 读取文件 ----------
+    def _list_all_files(self):
+        """读取文件夹里的「全部」文件名（未做勾选过滤），并按排序依据整理。
 
         注意：core.generate_plan 接收的是「文件名」列表（配合 base_dir 参数
         拼成绝对路径），所以这里返回字符串列表，而不是某个 FileItem 对象。
@@ -729,7 +759,7 @@ class FeatureScreen(Screen):
             return []
         names_out = []
         try:
-            names = sorted(os.listdir(self.selected_folder))
+            names = os.listdir(self.selected_folder)
         except PermissionError:
             # 权限不够：不要报「读取失败」，而是直接把用户送到授权页。
             self.app_ref.ensure_all_files_access(prompt=True, force=True)
@@ -745,7 +775,156 @@ class FeatureScreen(Screen):
             full = os.path.join(self.selected_folder, name)
             if os.path.isfile(full):
                 names_out.append(name)
-        return names_out
+        return self._sort_names(names_out)
+
+    def _sort_names(self, names):
+        """按「排序依据」整理文件顺序。
+
+        顺序很重要：它直接决定「谁拿到第一个序号」，所以做成可选项。
+            0 = 文件名称顺序（默认，与旧行为一致）
+            1 = 文件夹列表原顺序（系统列出来的先后）
+            2 = 时间顺序（旧 → 新）
+        """
+        if self.sort_mode == 1:
+            return list(names)
+
+        def _mtime(n):
+            try:
+                return os.path.getmtime(os.path.join(self.selected_folder, n))
+            except OSError:
+                return 0
+
+        if self.sort_mode == 2:
+            return sorted(names, key=_mtime)
+        return sorted(names)
+
+    def get_files_in_folder(self):
+        """返回「真正参与修改」的文件名列表。
+
+        顺序 = _list_all_files()（已按排序依据排好），再按「勾选文件」过滤：
+        selected_names 为 None 表示全部参与。
+        """
+        files = self._list_all_files()
+        if self.selected_names is None:
+            return files
+        wanted = set(self.selected_names)
+        return [n for n in files if n in wanted]
+
+    def _refresh_sel_label(self):
+        """刷新「参与修改：…」提示文字。"""
+        try:
+            if self.selected_names is None:
+                self.sel_label.text = "参与修改：全部文件"
+            else:
+                self.sel_label.text = (
+                    f"参与修改：已勾选 {len(self.selected_names)} 个文件"
+                )
+        except Exception:
+            pass
+
+    # ---------- 勾选文件 ----------
+    def open_pick_files(self, instance):
+        """打开「勾选文件」弹窗：只有勾上的文件会被改动。"""
+        files = self._list_all_files()
+        if not files:
+            self.show_message("文件夹里没有可处理的文件")
+            return
+
+        # 当前勾选集合（selected_names 为 None 表示「全部」）
+        if self.selected_names is None:
+            checked = set(files)
+        else:
+            checked = set(self.selected_names) & set(files)
+
+        root = BoxLayout(orientation="vertical", spacing=dp(8),
+                         padding=[dp(12), dp(12), dp(12), dp(12)])
+        _draw_flat(root, (1, 1, 1, 1))
+
+        head = Label(
+            text="勾选要参与修改的文件（不勾的完全不改动）",
+            color=COLOR_TEXT,
+            font_size="14sp",
+            size_hint_y=None,
+            height=dp(26),
+            halign="left",
+            valign="middle",
+        )
+        head.bind(size=lambda w, s: setattr(w, "text_size", s))
+        root.add_widget(head)
+
+        scroll = ScrollView(size_hint=(1, 1))
+        box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(2))
+        box.bind(minimum_height=box.setter("height"))
+        boxes = {}
+        for name in files:
+            row = BoxLayout(orientation="horizontal", size_hint_y=None,
+                            height=dp(38), spacing=dp(6))
+            cb = CheckBox(active=(name in checked), size_hint_x=None,
+                          width=dp(40), color=COLOR_PRIMARY)
+            lbl = Label(
+                text=name,
+                color=COLOR_TEXT,
+                font_size="14sp",
+                halign="left",
+                valign="middle",
+            )
+            lbl.bind(size=lambda w, s: setattr(w, "text_size", s))
+            row.add_widget(cb)
+            row.add_widget(lbl)
+            boxes[name] = cb
+            box.add_widget(row)
+        scroll.add_widget(box)
+        root.add_widget(scroll)
+
+        # 快捷：全选 / 全不选
+        quick = BoxLayout(orientation="horizontal", size_hint_y=None,
+                          height=dp(42), spacing=dp(8))
+
+        def _set_all(flag):
+            for cb in boxes.values():
+                cb.active = flag
+
+        btn_all = RoundButton(text="全选", bg=COLOR_PRIMARY,
+                              bg_down=COLOR_PRIMARY_D)
+        btn_all.bind(on_release=lambda *a: _set_all(True))
+        quick.add_widget(btn_all)
+
+        btn_none = RoundButton(text="全不选", bg=COLOR_PRIMARY,
+                               bg_down=COLOR_PRIMARY_D)
+        btn_none.bind(on_release=lambda *a: _set_all(False))
+        quick.add_widget(btn_none)
+        root.add_widget(quick)
+
+        popup = Popup(title="勾选文件", content=root, size_hint=(0.92, 0.82))
+
+        def _confirm(*a):
+            names = [n for n in files if boxes[n].active]
+            if not names:
+                self.show_message("至少要勾选一个文件")
+                return
+            if len(names) == len(files):
+                # 全部勾上 = 回到「全部参与」状态
+                self.selected_names = None
+            else:
+                self.selected_names = set(names)
+            self.plan = None
+            self._refresh_sel_label()
+            popup.dismiss()
+
+        bottom = BoxLayout(orientation="horizontal", size_hint_y=None,
+                           height=dp(44), spacing=dp(8))
+        btn_ok = RoundButton(text="确定", bg=COLOR_SUCCESS,
+                             bg_down=COLOR_SUCCESS_D)
+        btn_ok.bind(on_release=_confirm)
+        bottom.add_widget(btn_ok)
+
+        btn_cancel = RoundButton(text="取消", bg=COLOR_WARN,
+                                 bg_down=COLOR_WARN_D)
+        btn_cancel.bind(on_release=lambda *a: popup.dismiss())
+        bottom.add_widget(btn_cancel)
+        root.add_widget(bottom)
+
+        popup.open()
 
     def log_path(self):
         if not self.selected_folder:
@@ -1001,9 +1180,373 @@ class IndexScreen(FeatureScreen):
         return [InsertIndex(start=start, digits=digits, position=position)]
 
 
+# ================= 分段控件（互斥选项） =================
+class SegmentedRow(BoxLayout):
+    """一排互斥的选项按钮（简易分段控件）。
+
+    用法::
+
+        row = SegmentedRow([("保留原文", "keep"), ("序号", "seq")],
+                           initial="seq", on_change=cb)
+        row.value      # 当前选中的值
+        row.select(0)  # 用代码切换（不触发回调）
+    """
+
+    def __init__(self, options, initial=None, on_change=None, **kwargs):
+        kwargs.setdefault("orientation", "horizontal")
+        kwargs.setdefault("size_hint_y", None)
+        kwargs.setdefault("height", dp(40))
+        kwargs.setdefault("spacing", dp(6))
+        super().__init__(**kwargs)
+        self.options = list(options)
+        self.value = initial if initial is not None else self.options[0][1]
+        self._on_change = on_change
+        self._buttons = []
+        for i, (label_text, _val) in enumerate(self.options):
+            b = RoundButton(text=label_text, bg=COLOR_PRIMARY,
+                            bg_down=COLOR_PRIMARY_D, font_size="13sp",
+                            height=dp(40))
+            b.bind(on_release=lambda inst, idx=i: self.select(idx, notify=True))
+            self._buttons.append(b)
+            self.add_widget(b)
+        self._paint()
+
+    def select(self, index, notify=False):
+        if not (0 <= index < len(self._buttons)):
+            return
+        self.value = self.options[index][1]
+        self._paint()
+        if notify and self._on_change:
+            self._on_change(self.value)
+
+    def _paint(self):
+        """选中项用主蓝＋白字，未选中项用浅灰＋深字。"""
+        for i, b in enumerate(self._buttons):
+            active = (self.options[i][1] == self.value)
+            try:
+                if active:
+                    b._bg = tuple(COLOR_PRIMARY)
+                    b.color = (1, 1, 1, 1)
+                else:
+                    b._bg = (0.90, 0.92, 0.95, 1)
+                    b.color = COLOR_TEXT
+                b._bg_down = tuple(COLOR_PRIMARY_D)
+                b._c.rgba = list(b._bg)
+            except Exception:
+                pass
+
+
+# ================= 页面 4：分段重命名 =================
+class SegmentRenameScreen(FeatureScreen):
+    PAGE_TITLE = "分段重命名"
+    PAGE_SUBTITLE = "把文件名拆成「文字 + 数字」两段分别重排"
+
+    def build_ops_card(self):
+        # 本页参数最多，用更紧凑的间距，尽量减少「滚到执行按钮」的距离
+        card = Card(spacing=dp(6),
+                    padding=[dp(14), dp(10), dp(14), dp(10)])
+        # ---------- 顶部：一句话说明 ----------
+        intro = Label(
+            text=("把文件名拆成「文字 + 数字」两段分别重排：\n"
+                  "旅行照片12.png → IMG_001.png"),
+            color=COLOR_TEXT_SUB,
+            font_size="12sp",
+            size_hint_y=None,
+            height=dp(34),
+            halign="left",
+            valign="middle",
+        )
+        intro.bind(size=lambda w, s: setattr(w, "text_size", s))
+        card.add_widget(intro)
+        # ---------- 实时效果示例（放在最上方，进页面即可见） ----------
+        self.sample_label = Label(
+            text="示例：—",
+            color=COLOR_PRIMARY,
+            font_size="13sp",
+            size_hint_y=None,
+            height=dp(40),
+            halign="left",
+            valign="middle",
+        )
+        self.sample_label.bind(
+            size=lambda w, s: setattr(
+                w, "text_size", (max(1, s[0] - dp(20)), s[1])
+            )
+        )
+        _draw_round(self.sample_label, (0.93, 0.95, 1.0, 1), radius=dp(8))
+        card.add_widget(self.sample_label)
+
+        # ---------- ① 文字区（文件名前半段） ----------
+        card.add_widget(self._section_title("① 文字区（前半段）"))
+
+        self.text_seg = SegmentedRow(
+            [("保留原文", "keep"), ("字母序号", "seq"), ("固定文字", "fixed")],
+            initial="keep",
+            on_change=self._on_text_mode_change,
+        )
+        card.add_widget(self.text_seg)
+
+        self.text_start_input = FieldInput(text="1", hint_text="第几个字母开始")
+        self.text_start_input.input_filter = "int"
+        self.label_text_start = LabeledField("字母起始", self.text_start_input)
+        card.add_widget(self.label_text_start)
+
+        self.text_step_input = FieldInput(text="1", hint_text="每次前进几个")
+        self.text_step_input.input_filter = "int"
+        self.label_text_step = LabeledField("字母步长", self.text_step_input)
+        card.add_widget(self.label_text_step)
+
+        self.text_fixed_input = FieldInput(hint_text="例如：IMG")
+        self.label_text_fixed = LabeledField("固定文字", self.text_fixed_input)
+        card.add_widget(self.label_text_fixed)
+        card.add_widget(self._divider())
+
+        # ---------- ② 数字区（文件名后半段） ----------
+        card.add_widget(self._section_title("② 数字区（后半段）"))
+
+        self.digit_seg = SegmentedRow(
+            [("保留原文", "keep"), ("序号", "seq"), ("固定数字", "fixed")],
+            initial="seq",
+            on_change=self._on_digit_mode_change,
+        )
+        card.add_widget(self.digit_seg)
+
+        self.start_input = FieldInput(text="1", hint_text="起始数字")
+        self.start_input.input_filter = "int"
+        self.label_start = LabeledField("起始于", self.start_input)
+        card.add_widget(self.label_start)
+
+        self.step_input = FieldInput(text="1", hint_text="每次加几")
+        self.step_input.input_filter = "int"
+        self.label_step = LabeledField("步长", self.step_input)
+        card.add_widget(self.label_step)
+
+        self.digits_input = FieldInput(text="0", hint_text="0 = 不补零")
+        self.digits_input.input_filter = "int"
+        self.label_digits = LabeledField("补零位数", self.digits_input)
+        card.add_widget(self.label_digits)
+
+        # 补零方式开关行（左说明 + 右开关，与「插入序号」页同款排布）
+        self.arow = BoxLayout(orientation="horizontal", size_hint_y=None,
+                              height=dp(40), spacing=dp(8))
+        albl = Label(
+            text="补零：总位数固定",
+            color=COLOR_TEXT,
+            font_size="14sp",
+            size_hint_x=None,
+            width=dp(200),
+            halign="left",
+            valign="middle",
+        )
+        albl.bind(size=lambda w, s: setattr(w, "text_size", s))
+        self.arow.add_widget(albl)
+        self.adaptive_switch = Switch(active=True, size_hint_x=None, width=dp(60))
+        self.arow.add_widget(self.adaptive_switch)
+        self.arow.add_widget(Widget())
+        card.add_widget(self.arow)
+
+        self.digit_fixed_input = FieldInput(hint_text="例如：2024")
+        self.label_digit_fixed = LabeledField("固定数字", self.digit_fixed_input)
+        card.add_widget(self.label_digit_fixed)
+        card.add_widget(self._divider())
+
+        # ---------- 分隔符 ----------
+        self.sep_input = FieldInput(text="", hint_text="留空 = 两段直接相接")
+        self.label_sep = LabeledField("分隔符", self.sep_input)
+        card.add_widget(self.label_sep)
+
+        # ---------- ③ 排序依据 ----------
+        card.add_widget(self._section_title("③ 排序依据（决定谁排在前）"))
+        self.sort_seg = SegmentedRow(
+            [("文件名", 0), ("文件夹顺序", 1), ("时间 旧→新", 2)],
+            initial=0,
+            on_change=self._on_sort_change,
+        )
+        card.add_widget(self.sort_seg)
+
+        # 任一输入变化都刷新示例
+        for _w in (self.text_start_input, self.text_step_input,
+                   self.text_fixed_input, self.start_input, self.step_input,
+                   self.digits_input, self.digit_fixed_input, self.sep_input):
+            _w.bind(text=lambda *a: self._update_sample())
+        self.adaptive_switch.bind(active=lambda *a: self._update_sample())
+
+        self._refresh_enabled()
+        self._update_sample()
+        return card
+
+    # ---------- 布局辅助 ----------
+    def _show_row(self, widget, flag):
+        """显示 / 隐藏一整行设置；隐藏时高度归零，不留空白。"""
+        if widget is None:
+            return
+        try:
+            if not hasattr(widget, "_full_h"):
+                h = widget.height
+                widget._full_h = h if (h and h > 1) else dp(42)
+            widget.size_hint_y = None
+            widget.height = widget._full_h if flag else dp(0)
+            widget.opacity = 1.0 if flag else 0.0
+            widget.disabled = not flag
+        except Exception:
+            pass
+
+    # ---------- 联动 ----------
+    def _on_text_mode_change(self, value):
+        self._refresh_enabled()
+        self._update_sample()
+
+    def _on_digit_mode_change(self, value):
+        self._refresh_enabled()
+        self._update_sample()
+
+    def _on_sort_change(self, value):
+        try:
+            self.sort_mode = int(value)
+        except (TypeError, ValueError):
+            self.sort_mode = 0
+        self.plan = None
+
+    def _refresh_enabled(self):
+        """按当前模式隐藏 / 灰掉用不上的输入，避免用户误填。"""
+        try:
+            tm = self.text_seg.value
+            dm = self.digit_seg.value
+        except Exception:
+            return
+        text_seq = (tm == "seq")
+        text_fixed = (tm == "fixed")
+        digit_seq = (dm == "seq")
+        digit_fixed = (dm == "fixed")
+        # 文字区
+        self._show_row(getattr(self, "label_text_start", None), text_seq)
+        self._show_row(getattr(self, "label_text_step", None), text_seq)
+        self._show_row(getattr(self, "label_text_fixed", None), text_fixed)
+        self.text_start_input.disabled = not text_seq
+        self.text_step_input.disabled = not text_seq
+        self.text_fixed_input.disabled = not text_fixed
+        # 数字区
+        self._show_row(getattr(self, "label_start", None), digit_seq)
+        self._show_row(getattr(self, "label_step", None), digit_seq)
+        self._show_row(getattr(self, "label_digits", None), digit_seq)
+        self._show_row(getattr(self, "arow", None), digit_seq)
+        self._show_row(getattr(self, "label_digit_fixed", None), digit_fixed)
+        for w in (self.start_input, self.step_input, self.digits_input,
+                  self.adaptive_switch):
+            w.disabled = not digit_seq
+        self.digit_fixed_input.disabled = not digit_fixed
+
+    # ---------- 实时示例 ----------
+    @staticmethod
+    def _alpha_seq(n):
+        """1 → A、26 → Z、27 → AA（Excel 列风格）。"""
+        try:
+            n = int(n)
+        except (TypeError, ValueError):
+            n = 1
+        n = max(1, n)
+        out = ""
+        while n > 0:
+            n, r = divmod(n - 1, 26)
+            out = chr(65 + r) + out
+        return out
+
+    @staticmethod
+    def _sample_number(start, step, digits, adaptive):
+        """按补零规则渲染示例数字（两个一样时只显示一个）。"""
+        def fmt(v):
+            if digits <= 0:
+                return str(v)
+            if adaptive:
+                return str(v).zfill(digits)
+            return "0" * digits + str(v)
+        a = fmt(start)
+        b = fmt(start + step)
+        return a if a == b else "%s … %s" % (a, b)
+
+    def _update_sample(self, *args):
+        """把当前设置拼成一条文件名示例，不执行也能看懂结果。"""
+        lbl = getattr(self, "sample_label", None)
+        if lbl is None:
+            return
+        try:
+            try:
+                tm = self.text_seg.value
+                dm = self.digit_seg.value
+            except Exception:
+                return
+            if tm == "keep":
+                head = "旅行照片"
+            elif tm == "seq":
+                head = self._alpha_seq(self.text_start_input.text or "1")
+            else:
+                head = self.text_fixed_input.text or "（待填）"
+
+            if dm == "keep":
+                tail = "12"
+            elif dm == "seq":
+                try:
+                    start = int(self.start_input.text or "1")
+                    step = int(self.step_input.text or "1")
+                    digits = int(self.digits_input.text or "0")
+                except ValueError:
+                    lbl.text = "示例：（参数需为整数）"
+                    return
+                tail = self._sample_number(start, step, digits,
+                                           bool(self.adaptive_switch.active))
+            else:
+                tail = self.digit_fixed_input.text or "（待填）"
+
+            sep = self.sep_input.text or ""
+            lbl.text = "示例：%s%s%s.png" % (head, sep, tail)
+        except Exception:
+            lbl.text = "示例：（参数待完善）"
+
+    def collect_operations(self):
+        text_mode = self.text_seg.value
+        digit_mode = self.digit_seg.value
+
+        if text_mode == "fixed" and not self.text_fixed_input.text:
+            raise ValueError("「固定文字」模式必须填写文字")
+        if digit_mode == "fixed" and not self.digit_fixed_input.text:
+            raise ValueError("「固定数字」模式必须填写数字")
+
+        try:
+            text_start = int(self.text_start_input.text or "1")
+            text_step = int(self.text_step_input.text or "1")
+            start = int(self.start_input.text or "1")
+            step = int(self.step_input.text or "1")
+            digits = int(self.digits_input.text or "0")
+        except ValueError:
+            raise ValueError("序号相关的设置里必须填整数")
+
+        if text_step == 0:
+            raise ValueError("字母步长不能为 0")
+        if step == 0:
+            raise ValueError("数字步长不能为 0")
+        if digits < 0:
+            raise ValueError("补零位数不能为负数")
+        if start < 0:
+            raise ValueError("起始数字不能为负数")
+
+        return [SegmentRename(
+            text_mode=text_mode,
+            text_fixed=self.text_fixed_input.text,
+            text_start=text_start,
+            text_step=text_step,
+            digit_mode=digit_mode,
+            digit_fixed=self.digit_fixed_input.text,
+            start=start,
+            step=step,
+            digits=digits,
+            adaptive=bool(self.adaptive_switch.active),
+            separator=self.sep_input.text,
+        )]
+
+
 # ================= 首页 =================
 class HomeScreen(Screen):
-    """首页：只有 3 个功能入口按钮。"""
+    """首页：功能入口按钮（每个功能一页）。"""
 
     def __init__(self, app_ref, **kwargs):
         super().__init__(**kwargs)
@@ -1090,6 +1633,9 @@ class HomeScreen(Screen):
             "查找替换", "把文件名里的某些文字换掉", ReplaceScreen, COLOR_SUCCESS))
         page.add_widget(self._entry_button(
             "插入序号", "给文件按顺序编号", IndexScreen, COLOR_WARN))
+        page.add_widget(self._entry_button(
+            "分段重命名", "把文件名拆成「文字 + 数字」两段分别重排",
+            SegmentRenameScreen, COLOR_DANGER))
         root.add_widget(page)
         root.add_widget(Widget())  # 底部弹簧，吃掉剩余空间
 
@@ -1382,7 +1928,7 @@ class BatchRenamerApp(App):
 
     职责：
       * 启动时注册中文字体、申请 Android 权限；
-      * 搭建 ScreenManager（首页 + 3 个功能页）；
+      * 搭建 ScreenManager（首页 + 各功能页）；
       * 维护全局选中的文件夹，并提供 go_home / go_screen / refresh_folder_labels。
     """
 

@@ -42,3 +42,6 @@ _verify_*.py
 # ---- 崩溃日志（真机/本地调试产物，绝不入库） ----
 crash.log
 batch_renamer_crash.log
+
+# ---- 开发期渲染/体检产物（tools/render_segment.py 输出，不入库） ----
+tools/shots/
